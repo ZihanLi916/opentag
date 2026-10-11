@@ -165,8 +165,7 @@ export async function openAdd() {
 }
 export async function newAddress(url = "https://mcp.example.com/mcp") {
   await openAdd();
-  fireEvent.change(await screen.findByLabelText("MCP URL"), { target: { value: url } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(await screen.findByLabelText("Server URL"), { target: { value: url } });
 }
 
 export function authorization() {
