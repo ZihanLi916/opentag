@@ -1013,9 +1013,10 @@ while switching addresses discards that attempt. OAuth stores only Agent/Server 
 return view; cancellation restores this same dialog against its existing binding. Credentials remain
 strictly per Agent.
 
-The dialog is 440px wide and 480px high, bounded by the viewport with 16px margins. Its header and
-footer stay fixed; search results and constrained content scroll independently. Loading, API-key
-entry, errors, and changing button labels do not change the outer geometry. The opening server list
+The dialog is 440px wide and 352px high, bounded by the viewport with 16px margins. View all explicitly
+expands its height to 440px while keeping the header and URL field in place; choosing a server restores
+the compact height. Search results and constrained content scroll independently. Loading, API-key
+entry, errors, and changing button labels do not change the compact geometry. The opening server list
 is retained during background refreshes. Loading skeletons replace only the shortcut area, icons and
 selection marks reserve their dimensions, validation has a reserved line, and connection feedback
 has a fixed area above the footer. Only opacity transitions are used, with reduced-motion support.

@@ -90,18 +90,21 @@
   max-height: calc(100dvh - 2rem);
 }
 
-/* Keep the add flow's geometry independent of requests, validation, and authentication. */
+/* Only an explicit View all action expands the dialog; requests and authentication keep it compact. */
 .mcp-add-dialog {
   width: calc(100vw - 2rem);
   max-width: 27.5rem;
-  height: min(30rem, calc(100dvh - 2rem));
+  height: min(22rem, calc(100dvh - 2rem));
   max-height: calc(100dvh - 2rem);
-  top: max(1rem, calc((100dvh - 30rem) / 2));
+  top: max(1rem, calc((100dvh - 27.5rem) / 2));
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transition-property: opacity;
   overflow-wrap: anywhere;
+}
+.mcp-add-dialog:has(.mcp-add-servers-heading [aria-expanded="true"]) {
+  height: min(27.5rem, calc(100dvh - 2rem));
 }
 .mcp-add-dialog[data-starting-style],
 .mcp-add-dialog[data-ending-style] {
@@ -127,7 +130,7 @@
   padding: 0.25rem;
 }
 .mcp-add-field-error {
-  min-height: 1.5rem;
+  min-height: 1.25rem;
   flex-shrink: 0;
   margin-top: 0.25rem;
 }
@@ -136,7 +139,7 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding-top: 0.75rem;
+  padding-top: 0.25rem;
 }
 .mcp-add-servers-heading {
   display: flex;
@@ -196,8 +199,8 @@
 }
 .mcp-add-feedback {
   flex-shrink: 0;
-  height: 3.75rem;
-  padding-top: 0.75rem;
+  height: 2.5rem;
+  padding-top: 0.25rem;
   overflow-y: auto;
 }
 .mcp-add-footer {
@@ -228,7 +231,7 @@
 }
 @media (max-width: 600px) {
   .mcp-add-dialog {
-    padding: 1.25rem;
+    padding: 1rem;
   }
 }
 @media (prefers-reduced-motion: reduce) {

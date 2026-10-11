@@ -285,6 +285,8 @@ for (const { width, height } of [
   { width: 1440, height: 720 },
   { width: 320, height: 720 },
   { width: 320, height: 480 },
+  { width: 390, height: 844 },
+  { width: 768, height: 900 },
 ]) {
   test(`Add server stays stable through loading, search, selection and authentication at ${width}x${height}`, async ({
     page,
@@ -301,7 +303,10 @@ for (const { width, height } of [
     const initial = await geometry(dialog);
     fixture.releasePool();
     await dialog.getByRole("button", { name: "View all (8)" }).click();
-    expect(await geometry(dialog)).toEqual(initial);
+    const expanded = await geometry(dialog);
+    expect(expanded.slice(1, 3)).toEqual(initial.slice(1, 3));
+    expect(expanded[0]).toMatchObject({ x: initial[0]?.x, y: initial[0]?.y, width: initial[0]?.width });
+    expect(expanded[0]?.height).toBeGreaterThanOrEqual(initial[0]?.height ?? 0);
     await dialog.getByRole("textbox", { name: "Search servers" }).fill("service-7");
     await dialog.getByRole("button", { name: /service-7.*https/ }).click();
     await expect(dialog.getByRole("button", { name: "service-7", exact: true })).toHaveAttribute(
@@ -312,6 +317,15 @@ for (const { width, height } of [
     await dialog.getByRole("button", { name: "Connect", exact: true }).click();
     await expect(dialog.getByLabel("API key", { exact: true })).toBeFocused();
     expect(await geometry(dialog)).toEqual(initial);
+    const keyBounds = await dialog.getByLabel("API key", { exact: true }).boundingBox();
+    const footerBounds = await dialog.locator("footer").boundingBox();
+    expect(keyBounds).not.toBeNull();
+    expect(footerBounds).not.toBeNull();
+    if (keyBounds && footerBounds) expect(footerBounds.y - keyBounds.y - keyBounds.height).toBeLessThanOrEqual(64);
+    const bodyBounds = await dialog.locator(".mcp-add-body").boundingBox();
+    expect(bodyBounds).not.toBeNull();
+    if (keyBounds && bodyBounds)
+      expect(keyBounds.y + keyBounds.height + 4).toBeLessThanOrEqual(bodyBounds.y + bodyBounds.height);
     await expectWithinViewport(dialog);
     await expectWithinViewport(dialog.getByRole("button", { name: "Connect", exact: true }));
     await expectNoPageOverflow(page);
