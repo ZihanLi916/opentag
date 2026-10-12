@@ -87,7 +87,7 @@ describe("MCP management authority in the unit database", () => {
     });
   });
 
-  it("distinguishes inherited, empty, and overridden configuration without changing another Agent", async () => {
+  it("keeps independent snapshots, explicit empty settings, and one-time resets", async () => {
     const accountId = await owner();
     const first = await agent(accountId);
     const second = await agent(accountId);
@@ -114,10 +114,13 @@ describe("MCP management authority in the unit database", () => {
     expect(changed.overridden).toEqual({ url: true, authHeader: true, authScheme: true, extraHeaders: true });
     const untouched = await service.readAgentServer(accountId, second.id, server.id);
     expect(untouched.effective.extraHeaders).toEqual({ "x-team": "shared" });
-    expect(untouched.overridden).toEqual({ url: false, authHeader: false, authScheme: false, extraHeaders: false });
+    expect(untouched.overridden).toEqual({ url: true, authHeader: true, authScheme: true, extraHeaders: true });
+    // Anonymous connections send no authentication header, so the configured token name is inert.
     await expect(
-      service.updateBinding(accountId, first.id, server.id, { extraHeaders: { "X-Agent-Token": "collision" } }),
-    ).rejects.toMatchObject({ code: MCP_ERROR_CODES.AUTH_HEADER_INVALID });
+      service.updateBinding(accountId, first.id, server.id, {
+        extraHeaders: { "X-Agent-Token": "value" },
+      }),
+    ).resolves.toMatchObject({ effective: { extraHeaders: { "x-agent-token": "value" } } });
     const empty = await service.updateBinding(accountId, first.id, server.id, {
       emptyExtraHeaders: true,
       enabled: false,
@@ -208,10 +211,9 @@ describe("MCP management authority in the unit database", () => {
     const publicView = await service.readAgentServer(accountId, oauthAgent.id, server.id);
     expect(publicView.snapshot?.tools).toHaveLength(1);
     expect(JSON.stringify(publicView)).not.toContain("unit-sealed");
-    await service.updateServer(accountId, server.id, {
-      expectedRevision: server.revision,
-      url: "https://new.example.test/mcp",
-    });
+    for (const agentId of [oauthAgent.id, bearerAgent.id]) {
+      await service.updateBinding(accountId, agentId, server.id, { url: "https://new.example.test/mcp" });
+    }
     const oauth = await service.readProbeContext(accountId, oauthAgent.id, server.id);
     expect(oauth.authorization).toMatchObject({
       status: "revoked",
@@ -242,6 +244,31 @@ describe("MCP management authority in the unit database", () => {
     );
     expect((await service.listServers(accountId))[0]?.authorizedAgentCount).toBe(1);
   });
+
+  it.each(["oauth", "bearer", "none"] as const)(
+    "checks extra-header collisions against %s authorization",
+    async (kind) => {
+      const accountId = await owner();
+      const current = await agent(accountId);
+      const server = await service.createServer(accountId, {
+        ...definition,
+        defaultAuthKind: kind,
+        authHeader: "x-token",
+      });
+      await service.attachServer(accountId, current.id, server.id, true);
+      const collision = kind === "oauth" ? "authorization" : "x-token";
+      const write = () =>
+        service.updateBinding(accountId, current.id, server.id, { extraHeaders: { [collision]: "value" } });
+      if (kind === "none")
+        await expect(write()).resolves.toMatchObject({ effective: { extraHeaders: { "x-token": "value" } } });
+      else await expect(write()).rejects.toMatchObject({ code: MCP_ERROR_CODES.AUTH_HEADER_INVALID });
+      if (kind === "oauth") {
+        await expect(
+          service.updateBinding(accountId, current.id, server.id, { extraHeaders: { "x-token": "value" } }),
+        ).resolves.toMatchObject({ effective: { extraHeaders: { "x-token": "value" } } });
+      }
+    },
+  );
 
   it("guards disabled live mounts but removes soft-deleted Agents from counts, readers, and deletion blockers", async () => {
     const accountId = await owner();
@@ -298,7 +325,7 @@ describe("effective connection changes", () => {
     }
     return { accountId, first, second, server };
   }
-  it("does not revoke overridden URLs when a shared endpoint changes", async () => {
+  it("preserves every existing connection when the service seed endpoint changes", async () => {
     const { accountId, first, second, server } = await connectedPair();
     // Pin the same URL before the shared edit. This changes ownership, not the actual connection.
     await service.updateBinding(accountId, first.id, server.id, { url: server.url });
@@ -316,8 +343,9 @@ describe("effective connection changes", () => {
     expect(pinnedAfter.authorization).toEqual(pinnedBefore.authorization);
     expect(pinnedAfter.effective.url).toBe(server.url);
     const inherited = await service.readAgentServer(accountId, second.id, server.id);
-    expect(inherited.authorization).toMatchObject({ status: "revoked", probeState: "pending", hasCredential: false });
-    expect(inherited.snapshot?.protocolEra).toBeNull();
+    expect(inherited.authorization).toMatchObject({ status: "active", probeState: "succeeded", hasCredential: true });
+    expect(inherited.snapshot?.protocolEra).toBe("modern");
+    expect(inherited.effective.url).toBe(server.url);
   });
   it("keeps successful discovery for header reorder, metadata edits and equal-value restores", async () => {
     const { accountId, first, server } = await connectedPair();
@@ -334,7 +362,7 @@ describe("effective connection changes", () => {
     });
     expect((await service.readAgentServer(accountId, first.id, server.id)).authorization).toEqual(before.authorization);
   });
-  it("rechecks only Agents inheriting a changed header and retains their OAuth credentials", async () => {
+  it("preserves both Agents when the service seed headers change", async () => {
     const { accountId, first, second, server } = await connectedPair();
     await service.updateBinding(accountId, first.id, server.id, { extraHeaders: server.extraHeaders });
     const before = await service.readAgentServer(accountId, first.id, server.id);
@@ -345,7 +373,7 @@ describe("effective connection changes", () => {
     expect((await service.readAgentServer(accountId, first.id, server.id)).authorization).toEqual(before.authorization);
     expect((await service.readAgentServer(accountId, second.id, server.id)).authorization).toMatchObject({
       status: "active",
-      probeState: "pending",
+      probeState: "succeeded",
       hasCredential: true,
     });
   });

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { MCP_ERROR_CODES } from "@opentag/shared";
 import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -1576,6 +1577,124 @@ describe("P5 — a soft-deleted Agent releases its mounts", () => {
 // ------------------------------------------------------------------ effective values
 
 describe("Agent-level overrides", () => {
+  it("keeps connections and credentials independent of later definition edits", async () => {
+    const harness = await seed();
+    const server = await harness.servers.createServer(harness.accountId, {
+      name: "independent",
+      url: "https://original.example.test/mcp",
+      defaultAuthKind: "bearer",
+      authHeader: "x-api-key",
+      authScheme: "",
+      extraHeaders: { "x-tenant": "original" },
+    });
+    for (const agentId of [harness.agentA, harness.agentB]) {
+      await harness.servers.attachServer(harness.accountId, agentId, server.id, true);
+      await harness.authorization.setBearerOrNone(harness.accountId, agentId, server.id, {
+        kind: "bearer",
+        bearerKey: `key_${agentId}`,
+      });
+    }
+    const original = await harness.servers.readAgentServer(harness.accountId, harness.agentB, server.id);
+    await harness.servers.updateBinding(harness.accountId, harness.agentA, server.id, {
+      url: "https://agent-a.example.test/mcp",
+      extraHeaders: {},
+    });
+    await harness.servers.updateServer(harness.accountId, server.id, {
+      expectedRevision: server.revision,
+      url: "https://new.example.test/mcp",
+      authHeader: "x-new-key",
+      authScheme: "Token",
+      extraHeaders: { "x-tenant": "new" },
+    });
+    const unchanged = await harness.servers.readAgentServer(harness.accountId, harness.agentB, server.id);
+    expect(unchanged.effective).toEqual(original.effective);
+    expect(unchanged.authorization).toEqual(original.authorization);
+    expect((await harness.authorization.buildHeaders(harness.accountId, harness.agentB, server.id))["x-api-key"]).toBe(
+      `key_${harness.agentB}`,
+    );
+    // Legacy reset flags copy a seed once, including its non-default header and prefix.
+    await harness.servers.updateBinding(harness.accountId, harness.agentA, server.id, {
+      clearUrl: true,
+      clearAuthHeader: true,
+      clearAuthScheme: true,
+      clearExtraHeaders: true,
+    });
+    const copied = await harness.servers.readAgentServer(harness.accountId, harness.agentA, server.id);
+    expect(copied.effective).toEqual({
+      url: "https://new.example.test/mcp",
+      authHeader: "x-new-key",
+      authScheme: "Token",
+      extraHeaders: { "x-tenant": "new" },
+    });
+    await harness.servers.updateServer(harness.accountId, server.id, {
+      expectedRevision: server.revision + 1,
+      url: "https://later.example.test/mcp",
+      extraHeaders: {},
+    });
+    expect((await harness.servers.readAgentServer(harness.accountId, harness.agentA, server.id)).effective).toEqual(
+      copied.effective,
+    );
+    await harness.servers.detachServer(harness.accountId, harness.agentB, server.id);
+    const newMount = await harness.servers.attachServer(harness.accountId, harness.agentB, server.id, true);
+    expect(newMount.effective.url).toBe("https://later.example.test/mcp");
+    expect(newMount.effective.extraHeaders).toEqual({});
+    expect(newMount.authorization).toBeNull();
+  });
+
+  it("backfills inherited fields while preserving explicit empty values and authorization rows", async () => {
+    const harness = await seed();
+    const server = await harness.servers.createServer(harness.accountId, {
+      name: "migration",
+      url: "https://original.example.test/mcp",
+      defaultAuthKind: "bearer",
+      extraHeaders: { "x-tenant": "original" },
+    });
+    for (const agentId of [harness.agentA, harness.agentB]) {
+      await harness.servers.attachServer(harness.accountId, agentId, server.id, true);
+      await harness.authorization.setBearerOrNone(harness.accountId, agentId, server.id, {
+        kind: "bearer",
+        bearerKey: `key_${agentId}`,
+      });
+    }
+    await harness.database
+      .update(agentMcpServers)
+      .set({ urlOverride: null, authHeaderOverride: null, authSchemeOverride: null, extraHeadersOverride: null })
+      .where(eq(agentMcpServers.mcpServerId, server.id));
+    await harness.database
+      .update(agentMcpServers)
+      .set({ urlOverride: "https://agent-a.example.test/mcp", authSchemeOverride: "", extraHeadersOverride: {} })
+      .where(eq(agentMcpServers.agentId, harness.agentA));
+    const before = await Promise.all(
+      [harness.agentA, harness.agentB].map((agentId) =>
+        harness.servers.readAgentServer(harness.accountId, agentId, server.id),
+      ),
+    );
+    const authorizations = await harness.database.select().from(mcpServerAuthorizations);
+    const client = createDatabaseClient(databaseUrl);
+    openPools.push(client.sql);
+    await client.sql.unsafe(
+      await readFile(new URL("../../../drizzle/0060_mcp_connection_snapshots.sql", import.meta.url), "utf8"),
+    );
+    const after = await Promise.all(
+      [harness.agentA, harness.agentB].map((agentId) =>
+        harness.servers.readAgentServer(harness.accountId, agentId, server.id),
+      ),
+    );
+    expect(after.map((entry) => entry.effective)).toEqual(before.map((entry) => entry.effective));
+    expect(after.map((entry) => entry.overridden)).toEqual(
+      Array(2).fill({ url: true, authHeader: true, authScheme: true, extraHeaders: true }),
+    );
+    expect(await harness.database.select().from(mcpServerAuthorizations)).toEqual(authorizations);
+    await harness.servers.updateServer(harness.accountId, server.id, {
+      expectedRevision: server.revision,
+      url: "https://later.example.test/mcp",
+      extraHeaders: {},
+    });
+    expect((await harness.servers.readAgentServer(harness.accountId, harness.agentB, server.id)).effective).toEqual(
+      before[1]?.effective,
+    );
+  });
+
   it("sends Agent A to its overridden URL and Agent B to the shared one", async () => {
     const overridden = await McpFixtureServer.start();
     const shared = await McpFixtureServer.start();
@@ -1595,7 +1714,7 @@ describe("Agent-level overrides", () => {
       expect(forA[0]?.effective.url).toBe(overridden.endpoint);
       expect(forA[0]?.overridden.url).toBe(true);
       expect(forB[0]?.effective.url).toBe(shared.endpoint);
-      expect(forB[0]?.overridden.url).toBe(false);
+      expect(forB[0]?.overridden.url).toBe(true);
 
       // Probing follows the effective value, so the two Agents genuinely reach different origins.
       await harness.authorization.probe(harness.accountId, harness.agentA, server.id);
@@ -1608,7 +1727,7 @@ describe("Agent-level overrides", () => {
     }
   });
 
-  it("distinguishes restoring inheritance from overriding with nothing", async () => {
+  it("copies legacy defaults once and distinguishes an explicit empty header map", async () => {
     const harness = await seed();
     const shared = await McpFixtureServer.start();
     try {
@@ -1620,10 +1739,10 @@ describe("Agent-level overrides", () => {
       });
       await harness.servers.attachServer(harness.accountId, harness.agentA, server.id, true);
 
-      // Inherited first.
+      // The initial definition is copied on attachment.
       let entry = (await harness.servers.listAgentServers(harness.accountId, harness.agentA))[0];
       expect(entry?.effective.extraHeaders).toEqual({ "x-workspace-id": "shared" });
-      expect(entry?.overridden.extraHeaders).toBe(false);
+      expect(entry?.overridden.extraHeaders).toBe(true);
 
       // Override with nothing: the Agent now sends no extra headers at all, while the shared set is
       // untouched for every other Agent.
@@ -1634,11 +1753,11 @@ describe("Agent-level overrides", () => {
       const definition = await harness.servers.listServers(harness.accountId);
       expect(definition[0]?.extraHeaders).toEqual({ "x-workspace-id": "shared" });
 
-      // Restore inheritance: a different action with a different result.
+      // The legacy clear flag copies the current definition once.
       await harness.servers.updateBinding(harness.accountId, harness.agentA, server.id, { clearExtraHeaders: true });
       entry = (await harness.servers.listAgentServers(harness.accountId, harness.agentA))[0];
       expect(entry?.effective.extraHeaders).toEqual({ "x-workspace-id": "shared" });
-      expect(entry?.overridden.extraHeaders).toBe(false);
+      expect(entry?.overridden.extraHeaders).toBe(true);
     } finally {
       await shared.stop();
     }
@@ -1722,7 +1841,7 @@ describe("Agent-level overrides", () => {
       });
       states = await afterProbe();
       expect(states.get(harness.agentA)).toBe("succeeded");
-      expect(states.get(harness.agentB)).toBe("pending");
+      expect(states.get(harness.agentB)).toBe("succeeded");
 
       /*
        * S5: the background pass actually runs them.
@@ -1768,12 +1887,10 @@ describe("Agent-level overrides", () => {
       };
       expect(await eraOf(harness.agentA)).toEqual({ era: "modern", version: "2026-07-28" });
 
-      // A shared endpoint change moves the origin for every mount, so every cached era must go.
-      const definition = (await harness.servers.listServers(harness.accountId))[0];
-      await harness.servers.updateServer(harness.accountId, server.id, {
-        expectedRevision: definition?.revision as number,
-        url: second.endpoint,
-      });
+      // Moving each independent mount invalidates that mount's cached protocol era.
+      for (const agentId of [harness.agentA, harness.agentB]) {
+        await harness.servers.updateBinding(harness.accountId, agentId, server.id, { url: second.endpoint });
+      }
       expect(await eraOf(harness.agentA)).toEqual({ era: null, version: null });
       expect(await eraOf(harness.agentB)).toEqual({ era: null, version: null });
 
@@ -1978,11 +2095,7 @@ describe("Agent-level overrides", () => {
       expect((await stateOf(harness.agentA))?.oauthResource).toBe(first.endpoint);
 
       // A different origin: the token was issued for the old resource and must not follow.
-      const definition = (await harness.servers.listServers(harness.accountId))[0];
-      await harness.servers.updateServer(harness.accountId, server.id, {
-        expectedRevision: definition?.revision as number,
-        url: second.endpoint,
-      });
+      await harness.servers.updateBinding(harness.accountId, harness.agentA, server.id, { url: second.endpoint });
 
       const moved = await stateOf(harness.agentA);
       expect(moved?.status).toBe("revoked");
@@ -2024,11 +2137,7 @@ describe("Agent-level overrides", () => {
       const started = await harness.flows.start(harness.accountId, harness.agentA, server.id, [], FLOW_SECRET);
       const authorize = await fetch(started.authorizationUrl, { redirect: "manual" });
       const callback = new URL(authorize.headers.get("location") as string);
-      const definition = (await harness.servers.listServers(harness.accountId))[0];
-      await harness.servers.updateServer(harness.accountId, server.id, {
-        expectedRevision: definition?.revision as number,
-        url: second.endpoint,
-      });
+      await harness.servers.updateBinding(harness.accountId, harness.agentA, server.id, { url: second.endpoint });
 
       // The callback now has nothing to land on: its flow was cleared by the origin change.
       await expect(

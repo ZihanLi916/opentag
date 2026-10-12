@@ -772,7 +772,7 @@ describe("MCP HTTP routes — the two unauthenticated paths", () => {
       name: "fixture",
       enabled: true,
       effective: { url: server.endpoint, authHeader: "authorization", authScheme: "Bearer", extraHeaders: {} },
-      overridden: { url: false, authHeader: false, authScheme: false, extraHeaders: false },
+      overridden: { url: true, authHeader: true, authScheme: true, extraHeaders: true },
       authorization: { kind: "none", status: "active", hasCredential: false, probeState: "pending" },
     });
 

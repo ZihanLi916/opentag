@@ -319,7 +319,7 @@ describe("MCP CLI end to end", () => {
     expect(after.stdout).toContain("No MCP Servers mounted");
   }, 60_000);
 
-  it("separates an Agent override from a shared-definition edit on the command line", async () => {
+  it("keeps Agent settings independent and copies a service seed once on the command line", async () => {
     const shared = await fixture({ toolPages: [{ tools: [] }] });
     const overridden = await fixture({ toolPages: [{ tools: [] }] });
     const booted = await boot();
@@ -339,14 +339,17 @@ describe("MCP CLI end to end", () => {
     expect(configured.code, configured.stderr).toBe(0);
     expect(configured.stdout).toContain(`effectiveUrl\t${overridden.endpoint}\toverridden`);
 
-    // Restoring inheritance is a different action from leaving the override in place.
+    // A legacy reset copies the seed once and remains an independent stored value.
     const cleared = await cli(booted.home, ["agent", "mcp", "config", booted.agentId, "fixture", "--clear-url"]);
     expect(cleared.code, cleared.stderr).toBe(0);
-    expect(cleared.stdout).toContain(`effectiveUrl\t${shared.endpoint}\tinherited`);
+    expect(cleared.stdout).toContain(`effectiveUrl\t${shared.endpoint}\toverridden`);
 
-    // `--empty-extra-headers` and `--clear-extra-headers` are distinct, and only the latter inherits.
-    const shared2 = await cli(booted.home, ["mcp", "show", "fixture"]);
-    expect(shared2.code, shared2.stderr).toBe(0);
+    // Later seed edits leave the copied connection unchanged.
+    const edited = await cli(booted.home, ["mcp", "update", "fixture", "--url", overridden.endpoint]);
+    expect(edited.code, edited.stderr).toBe(0);
+    const shown = await cli(booted.home, ["mcp", "show", "fixture", "--agent", booted.agentId]);
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stdout).toContain(`effectiveUrl\t${shared.endpoint}\toverridden`);
   }, 60_000);
 
   it("flags a truncated tool snapshot rather than reporting only a count", async () => {

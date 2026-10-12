@@ -135,13 +135,13 @@ differ per Agent, the cached era lives on the **authorization row**, not the def
 Four tables, migration `0045`.
 
 ```
-mcp_servers                     a shared definition; holds no secret of any kind
+mcp_servers                     an Account-owned service seed; holds no secret of any kind
   id, account_id, name, description, url,
   default_auth_kind, auth_header, auth_scheme, extra_headers,
   revision, created_at, updated_at
   unique(account_id, lower(name))
 
-agent_mcp_servers               Agent <-> Server mount, plus that Agent's overrides
+agent_mcp_servers               Agent <-> Server mount, plus its independent connection snapshot
   agent_id, mcp_server_id, enabled,
   url_override, auth_header_override, auth_scheme_override, extra_headers_override,
   created_at, updated_at
@@ -241,47 +241,30 @@ immediately.
 rather than credentials.
 
 Header construction lives in exactly one place, `mcp-auth-headers.ts`, and its input is always the
-**effective** configuration — the shared definition with the Agent's overrides applied. Probing and
+**effective** configuration — the Agent's saved connection snapshot. Probing and
 any future runtime call take that same path, so a rule cannot be enforced in one and forgotten in
 the other.
 
-### Agent-level overrides
+### Independent Agent connections
 
-Each Agent may override four fields independently. `NULL` means inherit; any present value replaces.
+On attachment, the Server definition's URL, authentication header, token prefix, and extra headers
+are copied into the Agent binding's existing override columns. The definition remains an internal
+seed for catalog matching, deduplication, previously added server shortcuts, and future mounts;
+editing it does not update existing connection snapshots. Credentials remain strictly per Agent.
 
-| Effective field | Source |
-| --- | --- |
-| `url` | `COALESCE(binding.url_override, server.url)` |
-| `auth_header` | `COALESCE(binding.auth_header_override, server.auth_header)` |
-| `auth_scheme` | `COALESCE(binding.auth_scheme_override, server.auth_scheme)` |
-| `extra_headers` | `COALESCE(binding.extra_headers_override, server.extra_headers)` |
+Migration `0060_mcp_connection_snapshots` fills previously inherited fields from their effective
+values. Explicit empty prefixes and empty header maps remain empty. Authorization rows, encrypted
+credentials, tool snapshots, and probe state are not modified by this data migration. The nullable
+columns and fallback reader remain compatible with historical rows during deployment.
 
-`extra_headers` has **three** states, and two distinct actions to reach them:
+Settings edits only the current Agent. Extra headers are edited directly: an empty map means no
+extra headers. An empty token prefix means send the API key verbatim. Editing connection parameters
+re-probes only that Agent; changing its endpoint retains the existing OAuth invalidation rules.
 
-| State | Stored | Meaning |
-| --- | --- | --- |
-| Inherit | `extra_headers_override IS NULL` | Use the shared set |
-| Override with nothing | `extra_headers_override = '{}'` | This Agent sends **no** extra headers |
-| Override with a set | `extra_headers_override = '{...}'` | Use this Agent's set |
-
-"Restore inheritance" and "override with nothing" are therefore separate actions in both surfaces
-(`--clear-extra-headers` versus `--empty-extra-headers`; "use the shared headers" versus "send no
-extra headers"). Collapsing them would leave a user unable to drop a shared `x-workspace-id` for one
-Agent without deleting it for everyone.
-
-The other three fields need no such distinction, but they do need an **explicit** clear: an empty
-string is a legitimate value for `auth_scheme`, so "clear" can never be spelled as an empty value.
-
-Editing scope is a user choice:
-
-| Scope | Writes to | Affects |
-| --- | --- | --- |
-| This Agent (the default) | `agent_mcp_servers.*_override` | Only this Agent |
-| Shared definition | `mcp_servers.*` | Every Agent that mounts it, named in the dialog before the user confirms |
-
-Changing an Agent's overrides re-probes only that Agent. Changing the shared definition marks every
-mount's probe pending, and a background pass re-probes each one; the previous snapshot stays readable
-until a new result lands.
+Legacy API/CLI `clearUrl`, `clearAuthHeader`, `clearAuthScheme`, and `clearExtraHeaders` flags copy
+the current service seed once. They do not write NULL or restore continuing inheritance.
+`emptyExtraHeaders` still writes an explicit empty map. Definition edits may affect legacy nullable
+rows during deployment, but all migrated rows and new mounts are independent.
 
 ### Credential handling
 
@@ -897,9 +880,9 @@ the credential still works.
 `authorization.kind`, `authorization.status`, `probeState`, `toolsCount`, `probeError`,
 `accessTokenExpiresAt`, and that Server's `protocolEra` / `protocolVersion`.
 
-`PATCH /api/v1/agents/:agentId/mcp-servers/:mcpServerId` uses the same three-state contract on every
-field: omitted leaves it alone, a value writes an override, and the matching `clearX` flag restores
-inheritance. `extraHeaders` has one extra action, `emptyExtraHeaders`, which writes `{}`.
+`PATCH /api/v1/agents/:agentId/mcp-servers/:mcpServerId` leaves omitted fields unchanged and writes
+provided values to this Agent's snapshot. Legacy `clearX` flags copy the current definition once;
+`emptyExtraHeaders` writes `{}`.
 
 ## CLI
 
@@ -961,15 +944,13 @@ does. A merged column would send a user to reauthorize a Server that was only sw
 Each row offers the enable/disable switch, authorize / reauthorize / revoke, view tools, re-probe,
 edit, and remove.
 
-- **Edit** opens on "this Agent only", which writes the override columns and affects nobody else.
-  Choosing "shared definition" shows a warning naming the Agents it will affect — the same set the
-  Server counts for `boundAgentCount`. Each field shows its current effective value and whether it is
-  inherited or overridden, because a user cannot otherwise tell what the Server is actually being
-  sent. `extra_headers` carries both actions: "use the shared headers" and "send no extra headers".
-- **Remove** offers "from this Agent only", which leaves the definition in the Account pool, and
-  "remove and delete the definition", which is disabled while another Agent still mounts it and names
-  that Agent. Without the second option a definition with no mounts could never be reclaimed, since
-  there is no Account-level page that lists it.
+- **Settings** displays the current Agent's connection address, authentication status, and tools.
+  Advanced settings is collapsed by default. Authentication header and token prefix appear only for
+  API-key/token authorization; extra headers are directly editable for all authorization methods.
+  There are no account-default selectors, restore controls, shared-editor links, or Account-page
+  MCP configuration manager. Generic setup guidance is omitted; the empty-prefix hint is retained.
+- **Remove** disconnects this Agent and drops its credential. The internal service seed remains
+  available to previously added server shortcuts and the CLI's definition-management commands.
 - **Authorize** chooses the method for this Agent and, for OAuth, navigates the top-level browsing
   context to the authorization server rather than fetching the URL.
 - **View tools (N)** sits on the right of a dedicated tool footer, separated from the Server's

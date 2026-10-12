@@ -577,13 +577,13 @@ export type AttachMCPServerRequest = z.infer<typeof AttachMCPServerRequestSchema
  * The binding update: the single enable/disable layer (target 4) plus this Agent's overrides.
  *
  * Every field follows the same three-state contract: omitted leaves the stored value alone,
- * a value writes an override, and the matching `clearX` flag removes the override so the shared
- * definition applies again. A cleared field is never spelled as an empty value, because an empty
+ * a value writes this Agent's connection setting. Legacy `clearX` flags copy the current
+ * Server definition once; subsequent definition edits do not alter this Agent's snapshot. A cleared field is never spelled as an empty value, because an empty
  * `authScheme` is a legitimate override meaning "send the stored secret verbatim".
  *
  * `extraHeaders` has one extra action the other three do not: `emptyExtraHeaders` writes `{}`,
- * meaning this Agent sends no extra headers at all, which is distinct from inheriting the
- * definition's set.
+ * meaning this Agent sends no extra headers at all. `clearExtraHeaders` instead copies the
+ * definition's current set once.
  */
 export const UpdateMCPBindingRequestSchema = z
   .object({

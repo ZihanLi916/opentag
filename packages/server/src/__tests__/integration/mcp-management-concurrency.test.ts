@@ -34,6 +34,11 @@ async function seed(client: ReturnType<typeof createDatabaseClient>) {
     defaultAuthKind: "none",
   });
   await servers.attachServer(accountId, agentId, server.id, true);
+  // Exercise the legacy nullable path that definition edits still fence during rolling upgrades.
+  await client.database
+    .update(agentMcpServers)
+    .set({ extraHeadersOverride: null })
+    .where(eq(agentMcpServers.agentId, agentId));
   return { accountId, agentId, server };
 }
 

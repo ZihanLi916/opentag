@@ -1,6 +1,7 @@
 import {
   type CreateMCPServerRequest,
   type MCPAgentServer,
+  type MCPAuthKind,
   type MCPAuthorizationSummary,
   type MCPEffectiveConfig,
   type MCPOverrideSources,
@@ -327,19 +328,33 @@ export class McpServerService {
     source: "account" | "agent-self" = "account",
   ): Promise<MCPAgentServer> {
     await this.#requireAgent(accountId, agentId);
-    const server = await this.#requireServer(accountId, mcpServerId);
-    if (source === "agent-self" && server.defaultAuthKind === "none") {
-      throw new McpServiceError(
-        MCP_ERROR_CODES.SELF_ATTACH_NONE_AUTH_FORBIDDEN,
-        "Agent self-configuration cannot attach an MCP Server that does not require credentials",
-      );
-    }
     const now = this.#now();
     try {
       await this.#database.transaction(async (transaction) => {
-        await transaction
-          .insert(agentMcpServers)
-          .values({ agentId, mcpServerId, enabled, createdAt: now, updatedAt: now });
+        // Lock the seed before copying it, in the same order as definition edits and removal.
+        const [server] = await transaction
+          .select()
+          .from(mcpServers)
+          .where(and(eq(mcpServers.id, mcpServerId), eq(mcpServers.accountId, accountId)))
+          .for("update");
+        if (!server) throw mcpServerNotFound();
+        if (source === "agent-self" && server.defaultAuthKind === "none") {
+          throw new McpServiceError(
+            MCP_ERROR_CODES.SELF_ATTACH_NONE_AUTH_FORBIDDEN,
+            "Agent self-configuration cannot attach an MCP Server that does not require credentials",
+          );
+        }
+        await transaction.insert(agentMcpServers).values({
+          agentId,
+          mcpServerId,
+          enabled,
+          urlOverride: server.url,
+          authHeaderOverride: server.authHeader,
+          authSchemeOverride: server.authScheme,
+          extraHeadersOverride: server.extraHeaders,
+          createdAt: now,
+          updatedAt: now,
+        });
         if (server.defaultAuthKind === "none") {
           await transaction
             .insert(mcpServerAuthorizations)
@@ -406,7 +421,11 @@ export class McpServerService {
         and(eq(agentMcpServers.agentId, agentId), eq(agentMcpServers.mcpServerId, mcpServerId)),
       );
       if (!binding) throw mcpBindingNotFound();
-      const patch = applyOverridePatch(binding, input);
+      const [authorization] = await transaction
+        .select({ kind: mcpServerAuthorizations.kind })
+        .from(mcpServerAuthorizations)
+        .where(and(eq(mcpServerAuthorizations.agentId, agentId), eq(mcpServerAuthorizations.mcpServerId, mcpServerId)));
+      const patch = applyOverridePatch(binding, server, input, authorization?.kind ?? server.defaultAuthKind);
       const [row] = await transaction
         .update(agentMcpServers)
         .set({ ...(input.enabled === undefined ? {} : { enabled: input.enabled }), ...patch, updatedAt: this.#now() })
@@ -733,44 +752,45 @@ export async function liveBindingAgents(
     .orderBy(asc(agents.name));
 }
 
-/**
- * Turn an override patch into the columns to write.
- *
- * `extraHeadersOverride` has three states and needs two distinct actions: `clearExtraHeaders` writes
- * `null` (inherit the definition) while `emptyExtraHeaders` writes `{}` (this Agent sends no extra
- * headers at all). Collapsing them would leave a user unable to drop the definition's
- * `x-workspace-id` for one Agent without deleting it for everyone.
- */
+/** Legacy clear flags copy the current seed once; they never restore live inheritance. */
 function applyOverridePatch(
   binding: typeof agentMcpServers.$inferSelect,
+  server: typeof mcpServers.$inferSelect,
   input: UpdateMCPBindingRequest,
+  kind: MCPAuthKind,
 ): Partial<typeof agentMcpServers.$inferInsert> {
   const patch: Partial<typeof agentMcpServers.$inferInsert> = {};
   if (input.url !== undefined) patch.urlOverride = input.url;
-  if (input.clearUrl === true) patch.urlOverride = null;
+  if (input.clearUrl === true) patch.urlOverride = server.url;
   if (input.authHeader !== undefined) patch.authHeaderOverride = input.authHeader;
-  if (input.clearAuthHeader === true) patch.authHeaderOverride = null;
+  if (input.clearAuthHeader === true) patch.authHeaderOverride = server.authHeader;
   if (input.authScheme !== undefined) patch.authSchemeOverride = input.authScheme;
-  if (input.clearAuthScheme === true) patch.authSchemeOverride = null;
+  if (input.clearAuthScheme === true) patch.authSchemeOverride = server.authScheme;
   if (input.extraHeaders !== undefined) patch.extraHeadersOverride = normalizeExtraHeaders(input.extraHeaders);
-  if (input.clearExtraHeaders === true) patch.extraHeadersOverride = null;
+  if (input.clearExtraHeaders === true) patch.extraHeadersOverride = server.extraHeaders;
   if (input.emptyExtraHeaders === true) patch.extraHeadersOverride = {};
-  rejectAuthHeaderCollision(patch, binding);
+  rejectAuthHeaderCollision(patch, binding, kind);
   return patch;
 }
 
 /**
  * Reject an override whose extra headers would repeat its own authorization header name. The check
  * runs case-insensitively, because HTTP field names are, and it runs against the *resolved* pair so
- * an override of one field cannot collide with an inherited value of the other.
+ * editing one field cannot collide with another field in the same saved connection.
  */
 function rejectAuthHeaderCollision(
   patch: Partial<typeof agentMcpServers.$inferInsert>,
   binding: typeof agentMcpServers.$inferSelect,
+  kind: MCPAuthKind,
 ): void {
-  const extra = patch.extraHeadersOverride;
+  const extra = patch.extraHeadersOverride ?? binding.extraHeadersOverride;
   if (extra === undefined || extra === null) return;
-  const authHeader = patch.authHeaderOverride ?? binding.authHeaderOverride;
+  const authHeader =
+    kind === "oauth"
+      ? "authorization"
+      : kind === "bearer"
+        ? (patch.authHeaderOverride ?? binding.authHeaderOverride)
+        : undefined;
   if (authHeader === null || authHeader === undefined) return;
   if (Object.keys(extra).some((name) => name.toLowerCase() === authHeader.toLowerCase())) {
     throw new McpServiceError(

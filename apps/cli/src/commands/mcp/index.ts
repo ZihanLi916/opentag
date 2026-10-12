@@ -110,7 +110,7 @@ export function registerMcpCommand(program: Command): void {
 
   mcp
     .command("update <server>")
-    .description("Edit the shared definition, which affects every Agent that mounts it")
+    .description("Edit the service definition used for future Agent connections")
     .option("--description <text>", "override the probed description, at most 1024 bytes")
     .option("--url <url>", "the MCP endpoint")
     .option("--default-auth <kind>", "prefill for a new authorization: oauth | bearer | none")
@@ -320,16 +320,16 @@ export function registerAgentMcpCommands(agentCommand: Command): void {
 
   mcp
     .command("config <agent-id> <server>")
-    .description("Write this Agent's overrides of the shared definition")
+    .description("Edit this Agent's independent connection settings")
     .option("--url <url>", "override the endpoint for this Agent")
     .option("--auth-header <name>", "override the bearer authorization header name")
     .option("--auth-scheme <scheme>", "override the bearer scheme; an empty value sends the key verbatim")
     .option("--extra-header <name=value>", "override the extra headers (repeatable)", collect, [])
-    .option("--clear-url", "restore the shared endpoint")
-    .option("--clear-auth-header", "restore the shared authorization header name")
-    .option("--clear-auth-scheme", "restore the shared authorization scheme")
-    .option("--clear-extra-headers", "inherit the shared extra headers again")
-    .option("--empty-extra-headers", "send no extra headers for this Agent, without touching the shared set")
+    .option("--clear-url", "copy the current service endpoint")
+    .option("--clear-auth-header", "copy the current service authorization header name")
+    .option("--clear-auth-scheme", "copy the current service authorization scheme")
+    .option("--clear-extra-headers", "copy the current service extra headers")
+    .option("--empty-extra-headers", "send no extra headers for this Agent")
     .option("--json", "print JSON")
     .action(async (agentId: string, server: string, options: Record<string, unknown>) => {
       process.exitCode = await executeCommand(

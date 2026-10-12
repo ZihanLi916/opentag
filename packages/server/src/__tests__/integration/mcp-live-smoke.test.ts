@@ -223,8 +223,8 @@ describe("MCP management plane, end to end as a user would", () => {
      */
     expect(row.description).toBeNull();
     expect(row.discoveredDescription).toBe("Issue tracking");
-    // Nothing is overridden: this Agent uses the shared definition as written.
-    expect(Object.values(row.overridden).every((value) => value === false)).toBe(true);
+    // The definition was copied on attachment, so this Agent owns every connection parameter.
+    expect(Object.values(row.overridden).every((value) => value === true)).toBe(true);
 
     // The aggregate reflects one bound, one authorized, and a probe time.
     const pool = await app.inject({ method: "GET", url: MCP_SERVERS_PATH, headers: HEADERS });

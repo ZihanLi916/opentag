@@ -51,8 +51,9 @@ function lowercaseFieldNameCheck(column: string) {
 }
 
 /**
- * A shared Server definition. It holds no secret of any kind, which is what lets many Agents of one
- * Account mount and authorize the same definition independently. `default_auth_kind` is a prefill
+ * An Account-owned service seed for catalog matching and future mounts. Each new Agent binding
+ * copies its connection parameters once; later seed edits do not alter existing connections.
+ * It holds no secret of any kind. `default_auth_kind` is a prefill
  * for a new authorization — never a statement of what the Server requires — so two Agents may
  * authorize the same definition with different kinds.
  */

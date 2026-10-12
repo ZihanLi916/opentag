@@ -4,14 +4,7 @@ import * as m from "../../paraglide/messages.js";
 import { Button, Dialog } from "../../ui/design-system.js";
 import { McpDialogTitle } from "./mcp-dialog-title.js";
 import { McpAuthFields } from "./mcp-form.js";
-import {
-  type AuthDraft,
-  actionError,
-  authBindingPatch,
-  authDraft,
-  connectionHeaderMode,
-  validHeaders,
-} from "./mcp-form-model.js";
+import { type AuthDraft, actionError, authBindingPatch, authDraft, validHeaders } from "./mcp-form-model.js";
 import { canRevoke } from "./mcp-page-model.js";
 import { useMcpServerDetail, useSetMcpAuthorization, useStartMcpOAuth, useUpdateMcpBinding } from "./mcp-queries.js";
 import { McpConfirmDialog } from "./mcp-server-dialogs.js";
@@ -24,7 +17,13 @@ export function validAuth(draft: AuthDraft, existing: boolean): boolean {
       !MCPAuthSchemeSchema.safeParse(draft.authScheme).success)
   )
     return false;
-  return (existing && draft.headerMode !== "custom") || validHeaders(draft.headers, draft.authHeader);
+  return (
+    existing ||
+    validHeaders(
+      draft.headers,
+      draft.kind === "oauth" ? "authorization" : draft.kind === "bearer" ? draft.authHeader : "",
+    )
+  );
 }
 /** The OAuth start request for one Server: the card's declared scopes only when it has any. */
 function oauthStartInput(mcpServerId: string, scopes?: readonly string[]): { mcpServerId: string; scopes?: string[] } {
@@ -57,8 +56,6 @@ export function useMcpAuthorization(agentId: string) {
         ? saved.current.entry
         : entry;
     const patch = options?.connectionSettings === false ? {} : authBindingPatch(draft, current.effective);
-    if (options?.connectionSettings !== false && draft.headerMode === "inherit" && current.overridden.extraHeaders)
-      patch.clearExtraHeaders = true;
     if (Object.keys(patch).length) {
       saved.current = { agentId, entry: await update.mutateAsync({ mcpServerId: entry.mcpServerId, ...patch }) };
     }
@@ -96,7 +93,6 @@ export function McpAuthorizeDialog({
 }) {
   const [draft, setDraft] = useState<AuthDraft>(() => ({
     ...authDraft(entry.effective, entry.authorization?.kind ?? "oauth"),
-    headerMode: connectionHeaderMode(entry),
   }));
   const defaults = useMcpServerDetail(entry.authorization ? undefined : entry.mcpServerId);
   const chosen = useRef(false);

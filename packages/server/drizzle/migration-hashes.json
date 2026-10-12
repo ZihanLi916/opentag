@@ -300,6 +300,11 @@
       "idx": 59,
       "tag": "0059_bump_runtime_config_revision",
       "sha256": "4bef59bc615c23592c25e853eaf1f187736d23687a9840669db2acbbc0bbeed0"
+    },
+    {
+      "idx": 60,
+      "tag": "0060_mcp_connection_snapshots",
+      "sha256": "438463fb418fa613398092d46b9f34aef0cf4ea1728872d9270324f3e7cde811"
     }
   ]
 }
