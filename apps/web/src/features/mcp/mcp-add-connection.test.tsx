@@ -103,7 +103,7 @@ describe("URL and server shortcuts", () => {
     expect(screen.queryByLabelText("Search servers")).toBeNull();
     expect(screen.getByRole("button", { name: "tools-0" }).getAttribute("aria-pressed")).toBe("true");
   });
-  it("keeps the URL editable while the pool loads and retains its draft when loading fails", async () => {
+  it("preloads the pool before opening and offers retry when loading fails", async () => {
     stub([]);
     let reject: (reason: unknown) => void = () => {};
     vi.mocked(browserApi.mcpServers).mockReturnValue(
@@ -112,10 +112,17 @@ describe("URL and server shortcuts", () => {
       }),
     );
     wrap(<McpPage agentId={AGENT_ID} />);
-    await newAddress();
-    expect(screen.getByRole("status", { name: "Loading servers" })).toBeTruthy();
+    const add = await screen.findByRole("button", { name: "Add server" });
+    expect(add.hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
     reject(new Error("offline"));
+    await newAddress();
     expect(await screen.findByText("Couldn’t load servers.")).toBeTruthy();
+    expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("https://mcp.example.com/mcp");
+    vi.mocked(browserApi.mcpServers).mockResolvedValue({ servers: [detail(0).server] });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "linear" })).toBeTruthy();
+    expect(screen.queryByText("Couldn’t load servers.")).toBeNull();
     expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("https://mcp.example.com/mcp");
   });
   it("lets an ambiguous URL be resolved through View all when its matches are outside recent shortcuts", async () => {
@@ -132,7 +139,7 @@ describe("URL and server shortcuts", () => {
     wrap(<McpPage agentId={AGENT_ID} />);
     await newAddress("https://shared.example.com/mcp");
     connect();
-    await screen.findByText("More than one server uses this URL. Select an existing server.");
+    await screen.findByText("Choose an existing server for this URL.");
     fireEvent.click(screen.getByRole("button", { name: "View all (6)" }));
     fireEvent.click(screen.getByRole("button", { name: /service-0.*https/ }));
     expect(screen.getByRole("button", { name: "service-0" }).getAttribute("aria-pressed")).toBe("true");
@@ -176,8 +183,48 @@ describe("URL and server shortcuts", () => {
     await screen.findByLabelText("Server URL");
     writeUrl("https://new.example.com/mcp");
     resolve({ servers: [detail(1).server] });
-    await screen.findByRole("button", { name: /linear.*Added/ });
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading servers" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "linear" })).toBeNull();
     expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("https://new.example.com/mcp");
+  });
+  it.each([
+    ["connected", entry()],
+    ["disabled", entry({ enabled: false })],
+    ["not connected", entry({ authorization: null })],
+  ] as const)("hides the picker when every existing server is already in this Agent (%s)", async (_status, mounted) => {
+    stub([mounted]);
+    vi.mocked(browserApi.mcpServers).mockResolvedValue({ servers: [detail(1).server] });
+    wrap(<McpPage agentId={AGENT_ID} />);
+    await openAdd();
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByText("Or choose an existing server")).toBeNull();
+    expect(dialog.queryByRole("button", { name: "linear" })).toBeNull();
+    expect(dialog.getByLabelText("Server URL")).toBeTruthy();
+  });
+  it("filters mounted services from shortcuts, counts and search while keeping available choices text-only", async () => {
+    const servers = Array.from({ length: 6 }, (_, i) => ({
+      ...detail(1).server,
+      id: `44444444-4444-4444-8444-${String(i).padStart(12, "0")}`,
+      name: `service-${i}`,
+      url: `https://service-${i}.example.com/mcp`,
+    }));
+    const mounted = servers[0];
+    if (!mounted) throw new Error("Missing mounted service");
+    stub([entry({ mcpServerId: mounted.id })]);
+    vi.mocked(browserApi.mcpServers).mockResolvedValue({ servers });
+    wrap(<McpPage agentId={AGENT_ID} />);
+    await openAdd();
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "service-0" })).toBeNull();
+    expect(dialog.getByRole("button", { name: "service-1" }).querySelector("svg, img")).toBeNull();
+    fireEvent.click(dialog.getByRole("button", { name: "View all (5)" }));
+    fireEvent.change(dialog.getByLabelText("Search servers"), { target: { value: "service-0" } });
+    expect(dialog.queryByRole("button", { name: /service-0.*https/ })).toBeNull();
+    expect(dialog.getByText("No matching servers.")).toBeTruthy();
+    fireEvent.change(dialog.getByLabelText("Search servers"), { target: { value: "service-5" } });
+    fireEvent.click(dialog.getByRole("button", { name: /service-5.*https/ }));
+    expect(dialog.getByRole("button", { name: "service-5" }).getAttribute("aria-pressed")).toBe("true");
+    expect((dialog.getByLabelText("Server URL") as HTMLInputElement).value).toBe(servers[5]?.url);
   });
   it("collects a known API key only after Connect, without creating a new definition", async () => {
     stub([]);
