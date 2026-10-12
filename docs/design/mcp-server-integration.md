@@ -1007,7 +1007,9 @@ Connect reuses the existing create, attach, authorization, OAuth, and probe APIs
 and exact preset matches provide authentication defaults; Bearer defaults reveal an API-key field
 only after Connect, and OAuth defaults start provider sign-in directly. An unknown endpoint starts
 with an anonymous probe; an explicit authentication rejection permits an OAuth attempt through the
-existing discovery flow. It never infers an API key from a rejection. Tool failures and empty tool
+existing discovery flow. The transport retains the shared `MCP_AUTH_REJECTION_SUMMARY` in probe errors,
+prefixed by `MCP_UPSTREAM_ERROR`; Add matches that contract to distinguish HTTP 401/403 rejections
+from other failures. It never infers an API key from a rejection. Tool failures and empty tool
 sets keep the dialog open with concise feedback. Retries retain confirmed definitions and bindings,
 while switching addresses discards that attempt. OAuth stores only Agent/Server identifiers and the
 return view; cancellation restores this same dialog against its existing binding. Credentials remain

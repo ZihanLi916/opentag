@@ -1,5 +1,12 @@
 import { MCP_CATALOG_ENTRIES } from "@opentag/mcp-presets";
-import { type MCPAgentServer, type MCPAuthKind, type MCPServer, MCPServerUrlSchema } from "@opentag/shared/browser";
+import {
+  MCP_AUTH_REJECTION_SUMMARY,
+  MCP_ERROR_CODES,
+  type MCPAgentServer,
+  type MCPAuthKind,
+  type MCPServer,
+  MCPServerUrlSchema,
+} from "@opentag/shared/browser";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, browserApi } from "../../api.js";
 import * as m from "../../paraglide/messages.js";
@@ -142,7 +149,7 @@ export function useMcpAddConnection(props: McpAddProps) {
     if (result.probeState !== "succeeded") {
       // The existing probe contract retains this bounded, credential-free auth rejection summary.
       // It is evidence to try OAuth discovery, never evidence to request an API key.
-      if (result.probeError?.includes("The MCP Server rejected the credential")) {
+      if (result.probeError === `${MCP_ERROR_CODES.UPSTREAM_ERROR}: ${MCP_AUTH_REJECTION_SUMMARY}`) {
         if (current.kind === "bearer") {
           setNeedsKey(true);
           throw new Error("key");

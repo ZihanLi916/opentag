@@ -3,6 +3,11 @@
 These screenshots come from `e2e/tests/mcp-add.spec.ts`, using the built application and fictional MCP fixtures.
 MCP management responses and provider consent are simulated; these tests do not authorize a real provider account.
 
+`e2e/tests/mcp-auth-rejection.spec.ts` additionally runs the real management API and a local HTTP peer.
+Both 401 and 403 are passed through transport, probe persistence, and the browser Add flow: anonymous
+access reaches the fixture OAuth sign-in page; a rejected bearer key stays editable with its specific error.
+This covers the web/server rejection contract without authenticating against an external provider.
+
 - [Desktop authentication](./authentication-desktop.png): API key appears only after Connect requires it.
 - [320px authentication](./authentication-320.png): the dialog remains within the viewport and preserves focused input borders.
 - [Desktop loading](./loading-desktop.png): the loading label stays on one line and the footer remains in place.

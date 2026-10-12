@@ -1,3 +1,4 @@
+import { MCP_AUTH_REJECTION_SUMMARY, MCP_ERROR_CODES } from "@opentag/shared/browser";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, browserApi } from "../../api.js";
@@ -117,6 +118,27 @@ describe("URL and server shortcuts", () => {
     expect(await screen.findByText("Couldn’t load servers.")).toBeTruthy();
     expect((screen.getByLabelText("Server URL") as HTMLInputElement).value).toBe("https://mcp.example.com/mcp");
   });
+  it("lets an ambiguous URL be resolved through View all when its matches are outside recent shortcuts", async () => {
+    stub([]);
+    const servers = Array.from({ length: 6 }, (_, i) => ({
+      ...detail(0).server,
+      id: `44444444-4444-4444-8444-${String(i).padStart(12, "0")}`,
+      name: `service-${i}`,
+      url: i < 2 ? "https://shared.example.com/mcp" : `https://service-${i}.example.com/mcp`,
+      createdAt: `2026-09-${String(i + 10).padStart(2, "0")}T00:00:00.000Z`,
+    }));
+    vi.mocked(browserApi.mcpServers).mockResolvedValue({ servers });
+    const calls = writes();
+    wrap(<McpPage agentId={AGENT_ID} />);
+    await newAddress("https://shared.example.com/mcp");
+    connect();
+    await screen.findByText("More than one server uses this URL. Select an existing server.");
+    fireEvent.click(screen.getByRole("button", { name: "View all (6)" }));
+    fireEvent.click(screen.getByRole("button", { name: /service-0.*https/ }));
+    expect(screen.getByRole("button", { name: "service-0" }).getAttribute("aria-pressed")).toBe("true");
+    expect(calls.create).not.toHaveBeenCalled();
+    expect(calls.attach).not.toHaveBeenCalled();
+  });
   it("creates, binds, and probes a new anonymous service through the existing APIs", async () => {
     stub([]);
     const calls = writes();
@@ -222,7 +244,7 @@ describe("URL and server shortcuts", () => {
     calls.probe.mockResolvedValue({
       ...ready,
       probeState: "failed",
-      probeError: "MCP_UPSTREAM_ERROR: The MCP Server rejected the credential",
+      probeError: `${MCP_ERROR_CODES.UPSTREAM_ERROR}: ${MCP_AUTH_REJECTION_SUMMARY}`,
       toolsCount: null,
     });
     const oauth = vi.spyOn(browserApi, "startMcpOAuth").mockRejectedValue(new ApiError(502, "unknown auth"));
@@ -232,8 +254,37 @@ describe("URL and server shortcuts", () => {
     await waitFor(() => expect(oauth).toHaveBeenCalled());
     expect(screen.queryByLabelText("API key")).toBeNull();
   });
+  it("keeps a rejected bearer key editable and reports the credential error without starting OAuth", async () => {
+    stub([]);
+    vi.mocked(browserApi.mcpServers).mockResolvedValue({
+      servers: [{ ...detail(0).server, defaultAuthKind: "bearer" }],
+    });
+    const calls = writes();
+    calls.probe.mockResolvedValue({
+      ...ready,
+      probeState: "failed",
+      probeError: `${MCP_ERROR_CODES.UPSTREAM_ERROR}: ${MCP_AUTH_REJECTION_SUMMARY}`,
+      toolsCount: null,
+    });
+    const oauth = vi.spyOn(browserApi, "startMcpOAuth");
+    wrap(<McpPage agentId={AGENT_ID} />);
+    await openAdd();
+    fireEvent.click(await screen.findByRole("button", { name: "linear" }));
+    connect();
+    fireEvent.change(await screen.findByLabelText("API key"), { target: { value: "wrong-key" } });
+    connect();
+    await screen.findByText("Invalid API key. Try again.");
+    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("wrong-key");
+    expect(oauth).not.toHaveBeenCalled();
+  });
   it.each([
     { ...ready, probeState: "failed" as const, probeError: "offline", message: "Couldn’t load tools. Try again." },
+    {
+      ...ready,
+      probeState: "failed" as const,
+      probeError: `${MCP_ERROR_CODES.PROBE_FAILED}: ${MCP_AUTH_REJECTION_SUMMARY}`,
+      message: "Couldn’t load tools. Try again.",
+    },
     { ...ready, toolsCount: 0, message: "This server has no available tools." },
   ])("does not claim readiness when $message", async (result) => {
     stub([]);
