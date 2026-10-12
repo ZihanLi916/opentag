@@ -132,6 +132,7 @@ export function McpAuthFields({
   label = m.mcp_auth_label(),
   variant = "setup",
   connectionSettings = true,
+  fixedMethod = false,
 }: {
   draft: AuthDraft;
   onChange: (draft: AuthDraft) => void;
@@ -139,8 +140,10 @@ export function McpAuthFields({
   label?: string;
   variant?: "setup" | "settings";
   connectionSettings?: boolean;
+  fixedMethod?: boolean;
 }) {
   const help = authMethodHelp(draft.kind, variant);
+  if (fixedMethod) return <McpAuthMethodDetails draft={draft} onChange={onChange} help={help} variant={variant} />;
   const choiceClass = variant === "settings" ? "mcp-auth-choice" : undefined;
   return (
     <>
@@ -166,34 +169,46 @@ export function McpAuthFields({
         {variant === "setup" ? <p className="mt-3 text-xs leading-relaxed text-kumo-subtle">{help}</p> : null}
       </div>
       <McpAuthMethodDetails draft={draft} onChange={onChange} help={help} variant={variant} />
-      {connectionSettings ? (
-        <McpDisclosure label={m.mcp_advanced()}>
-          <div className="grid gap-4">
-            {draft.kind === "bearer" ? (
-              <McpTokenSettings
-                header={draft.authHeader}
-                prefix={draft.authScheme}
-                onHeader={(authHeader) => onChange({ ...draft, authHeader })}
-                onPrefix={(authScheme) => onChange({ ...draft, authScheme })}
-              />
-            ) : null}
-            {existing ? (
-              <McpHeaderMode value={draft.headerMode} onChange={(headerMode) => onChange({ ...draft, headerMode })} />
-            ) : (
-              <span className="text-sm font-medium">{m.mcp_edit_advanced()}</span>
-            )}
-            {!existing || draft.headerMode === "custom" ? (
-              <>
-                <McpHeaders rows={draft.headers} onChange={(headers) => onChange({ ...draft, headers })} />
-                {!validHeaders(draft.headers, draft.authHeader) ? (
-                  <p className="text-xs text-kumo-danger">{m.mcp_headers_invalid()}</p>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        </McpDisclosure>
-      ) : null}
+      {connectionSettings ? <McpAuthConnectionSettings draft={draft} onChange={onChange} existing={existing} /> : null}
     </>
+  );
+}
+
+function McpAuthConnectionSettings({
+  draft,
+  onChange,
+  existing,
+}: {
+  draft: AuthDraft;
+  onChange: (draft: AuthDraft) => void;
+  existing: boolean;
+}) {
+  return (
+    <McpDisclosure label={m.mcp_advanced()}>
+      <div className="grid gap-4">
+        {draft.kind === "bearer" ? (
+          <McpTokenSettings
+            header={draft.authHeader}
+            prefix={draft.authScheme}
+            onHeader={(authHeader) => onChange({ ...draft, authHeader })}
+            onPrefix={(authScheme) => onChange({ ...draft, authScheme })}
+          />
+        ) : null}
+        {existing ? (
+          <McpHeaderMode value={draft.headerMode} onChange={(headerMode) => onChange({ ...draft, headerMode })} />
+        ) : (
+          <span className="text-sm font-medium">{m.mcp_edit_advanced()}</span>
+        )}
+        {!existing || draft.headerMode === "custom" ? (
+          <>
+            <McpHeaders rows={draft.headers} onChange={(headers) => onChange({ ...draft, headers })} />
+            {!validHeaders(draft.headers, draft.authHeader) ? (
+              <p className="text-xs text-kumo-danger">{m.mcp_headers_invalid()}</p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    </McpDisclosure>
   );
 }
 
