@@ -24,10 +24,14 @@ async function agent(page: Page) {
 }
 
 /** A local HTTP MCP/OAuth peer; OpenTag's API, storage, redirects, and probes are real. */
-async function peer(kind: MCPAuthKind) {
+async function peer(kind: MCPAuthKind, isolated = false, toolCount = 1) {
   let origin = "";
   let unavailable = false;
   let tokenFailure = false;
+  let expired = false;
+  let registrationGate: Promise<void> | undefined;
+  const requiresCredential = (authorization?: string) =>
+    kind !== "none" && (expired || authorization !== "Bearer fixture-key");
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", origin);
     let raw = "";
@@ -36,10 +40,10 @@ async function peer(kind: MCPAuthKind) {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(body));
     };
-    if (oauthResponse(url, response, json)) return;
+    if (await oauthResponse(url, response, json)) return;
     if (url.pathname !== "/mcp") return json({}, 404);
     if (unavailable) return json({ error: "unavailable" }, 503);
-    if (kind !== "none" && request.headers.authorization !== "Bearer fixture-key") {
+    if (requiresCredential(request.headers.authorization)) {
       response.setHeader(
         "www-authenticate",
         `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
@@ -58,7 +62,11 @@ async function peer(kind: MCPAuthKind) {
   function rpcResult(method: string | undefined) {
     return method === "tools/list"
       ? {
-          tools: [{ name: "read_document", description: "Read a fixture document", inputSchema: { type: "object" } }],
+          tools: Array.from({ length: toolCount }, (_, index) => ({
+            name: index ? `read_document_${index}` : "read_document",
+            description: "Read a fixture document",
+            inputSchema: { type: "object" },
+          })),
         }
       : {
           protocolVersion: "2025-06-18",
@@ -66,7 +74,11 @@ async function peer(kind: MCPAuthKind) {
           serverInfo: { name: "connect-fixture", version: "1" },
         };
   }
-  function oauthResponse(url: URL, response: ServerResponse, json: (body: unknown, status?: number) => void): boolean {
+  async function oauthResponse(
+    url: URL,
+    response: ServerResponse,
+    json: (body: unknown, status?: number) => void,
+  ): Promise<boolean> {
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
       json({ resource: `${origin}/mcp`, authorization_servers: [origin] });
       return true;
@@ -81,7 +93,7 @@ async function peer(kind: MCPAuthKind) {
       return true;
     }
     if (url.pathname === "/register") {
-      json({ client_id: "connect-fixture", token_endpoint_auth_method: "none" });
+      await registerClient(json);
       return true;
     }
     if (url.pathname === "/authorize") {
@@ -90,10 +102,21 @@ async function peer(kind: MCPAuthKind) {
     }
     if (url.pathname === "/token") {
       if (tokenFailure) json({ error: "invalid_grant" }, 400);
-      else json({ access_token: "fixture-key", token_type: "Bearer", expires_in: 3600 });
+      else {
+        expired = false;
+        json({ access_token: "fixture-key", token_type: "Bearer", expires_in: 3600 });
+      }
       return true;
     }
     return false;
+  }
+  async function registerClient(json: (body: unknown, status?: number) => void) {
+    if (registrationGate) {
+      await registrationGate;
+      json({ error: "temporarily_unavailable" }, 503);
+    } else {
+      json({ client_id: "connect-fixture", token_endpoint_auth_method: "none" });
+    }
   }
   function consent(url: URL, response: ServerResponse) {
     const callback = new URL(url.searchParams.get("redirect_uri") ?? baseURL);
@@ -101,7 +124,10 @@ async function peer(kind: MCPAuthKind) {
     const cancel = new URL(callback);
     cancel.searchParams.set("error", "access_denied");
     callback.searchParams.set("code", "fixture-code");
-    response.writeHead(200, { "content-type": "text/html" });
+    response.writeHead(200, {
+      "content-type": "text/html",
+      ...(isolated ? { "cross-origin-opener-policy": "same-origin" } : {}),
+    });
     response.end(
       `<html lang="en"><title>Local consent fixture</title><h1>Local consent fixture</h1><a href="${callback}">Approve</a><a href="${cancel}">Cancel sign-in</a></html>`,
     );
@@ -115,8 +141,14 @@ async function peer(kind: MCPAuthKind) {
     unavailable: (value: boolean) => {
       unavailable = value;
     },
+    expire: () => {
+      expired = true;
+    },
     tokenFailure: (value: boolean) => {
       tokenFailure = value;
+    },
+    failRegistrationAfter: (gate: Promise<void>) => {
+      registrationGate = gate;
     },
     stop: async () => {
       server.closeAllConnections();
@@ -138,6 +170,30 @@ async function mounts(page: Page, id: string) {
     mcpServerId: string;
     authorization: { kind: MCPAuthKind } | null;
   }[];
+}
+
+async function discoverPeer(page: Page, current: Awaited<ReturnType<typeof agent>>, url: string) {
+  const created = await page.request.post("/api/v1/mcp-servers", {
+    headers: current.headers,
+    data: { name: `discover-${randomUUID()}`, url: url, defaultAuthKind: "oauth" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const serverId = ((await created.json()) as { id: string }).id;
+  // Reuse a real local peer through one catalog entry, without contacting an external provider.
+  await page.context().route("**/api/v1/mcp-servers", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        servers: body.servers.map((server: { id: string }) =>
+          server.id === serverId ? { ...server, url: "https://mcp.linear.app/mcp" } : server,
+        ),
+      },
+    });
+  });
+  return serverId;
 }
 
 for (const kind of ["bearer", "none"] as const) {
@@ -162,21 +218,18 @@ for (const kind of ["bearer", "none"] as const) {
       const initial = await mounts(page, current.id);
       expect(initial).toHaveLength(1);
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+      if (kind === "none") upstream.unavailable(false);
+      const retryDialog = await openAdd(page, current.id, upstream.url);
       if (kind === "bearer") {
-        const keyDialog = page.getByRole("dialog");
-        await expect(keyDialog.getByRole("radio")).toHaveCount(0);
-        const input = keyDialog.getByLabel("API key or token", { exact: true });
+        const input = retryDialog.getByLabel("API key", { exact: true });
         await expect(input).toBeFocused();
         await input.fill("fixture-key");
-        await page.keyboard.press("Enter");
-      } else {
-        await expect(page.getByRole("alert")).toContainText("Couldn’t load tools. Try again.");
-        upstream.unavailable(false);
-        await page.getByRole("button", { name: "Retry", exact: true }).click();
+        await retryDialog.getByRole("button", { name: "Connect", exact: true }).click();
       }
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
+      await expect(page.locator(`[id="mcp-server-${initial[0]?.mcpServerId}"]`)).toBeFocused();
       expect(await mounts(page, current.id)).toHaveLength(1);
       expect((await mounts(page, current.id))[0]?.mcpServerId).toBe(initial[0]?.mcpServerId);
     } finally {
@@ -185,39 +238,80 @@ for (const kind of ["bearer", "none"] as const) {
   });
 }
 
-test("real local OAuth success, cancellation, token failure and reconnect retain the binding", async ({ page }) => {
+test("real local OAuth popup cancellation removes new setup and reconnect retains its binding", async ({ page }) => {
   const upstream = await peer("oauth");
   try {
     const current = await agent(page);
-    await openAdd(page, current.id, upstream.url);
-    await page.getByRole("link", { name: "Cancel sign-in" }).click();
-    const restored = page.getByRole("dialog", { name: "Add custom connector", exact: true });
-    await expect(restored).toContainText("Sign-in was not completed. Try again.");
+    const firstWindow = page.waitForEvent("popup");
+    const dialog = await openAdd(page, current.id, upstream.url);
+    const cancelled = await firstWindow;
+    await cancelled.getByRole("link", { name: "Cancel sign-in" }).click();
+    await expect(dialog).toContainText("Sign-in was cancelled. You can try again.");
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+    const approveWindow = page.waitForEvent("popup");
+    await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+    const approved = await approveWindow;
+    await approved.getByRole("link", { name: "Approve", exact: true }).click();
+    await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
     const initial = await mounts(page, current.id);
     expect(initial).toHaveLength(1);
-    await restored.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByRole("link", { name: "Approve", exact: true }).click();
-    await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
     const serverId = initial[0]?.mcpServerId;
     const revoked = await page.request.delete(`/api/v1/agents/${current.id}/mcp-servers/${serverId}/authorization`, {
       headers: current.headers,
     });
     expect(revoked.ok()).toBeTruthy();
     await page.reload();
+    const retryWindow = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Reconnect", exact: true }).click();
-    await page.getByRole("link", { name: "Cancel sign-in" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(page.getByRole("alert")).toContainText("Sign-in was not completed. Try again.");
+    const retry = await retryWindow;
+    await retry.getByRole("link", { name: "Cancel sign-in" }).click();
+    await expect(page.getByText("Sign-in was cancelled. You can try again.")).toBeVisible();
+    expect(await mounts(page, current.id)).toHaveLength(1);
+    const failureWindow = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Reconnect", exact: true }).click();
     upstream.tokenFailure(true);
-    await page.getByRole("link", { name: "Approve", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Sign-in was not completed. Try again.");
+    await (await failureWindow).getByRole("link", { name: "Approve", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Couldn’t start sign-in. Try again.");
     upstream.tokenFailure(false);
+    const finalWindow = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Reconnect", exact: true }).click();
-    await page.getByRole("link", { name: "Approve", exact: true }).click();
+    await (await finalWindow).getByRole("link", { name: "Approve", exact: true }).click();
     await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
     expect((await mounts(page, current.id))[0]?.mcpServerId).toBe(serverId);
     expect(await mounts(page, current.id)).toHaveLength(1);
+  } finally {
+    await upstream.stop();
+  }
+});
+
+test("Discover retains search across a real OAuth cancellation and successful retry", async ({ page }) => {
+  const upstream = await peer("oauth");
+  try {
+    const current = await agent(page);
+    const serverId = await discoverPeer(page, current, upstream.url);
+    await page.goto(`/agents/${current.id}/mcp`);
+    await page.getByRole("button", { name: "Discover", exact: true }).click();
+    const discover = page.getByRole("dialog", { name: "Discover", exact: true });
+    await discover.getByLabel("Search connectors", { exact: true }).fill("Linear");
+    await expectAccessible(page);
+    await page.screenshot({ path: test.info().outputPath("discover-add-icon-desktop.png") });
+    const cancellation = page.waitForEvent("popup");
+    await discover.getByRole("button", { name: "Add: Linear", exact: true }).click();
+    const popup = await cancellation;
+    await popup.getByRole("link", { name: "Cancel sign-in" }).click();
+    await expect(discover).toContainText("Sign-in was cancelled. You can try again.");
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+    await expect(discover.getByLabel("Search connectors", { exact: true })).toHaveValue("Linear");
+    const success = page.waitForEvent("popup");
+    await discover.getByRole("button", { name: "Add: Linear", exact: true }).click();
+    await (await success).getByRole("link", { name: "Approve", exact: true }).click();
+    await expect(discover).toContainText("Connected");
+    await expect(discover.getByLabel("Search connectors", { exact: true })).toHaveValue("Linear");
+    expect((await mounts(page, current.id))[0]?.mcpServerId).toBe(serverId);
+    await page.screenshot({ path: test.info().outputPath("discover-oauth-connected.png") });
+    await discover.getByRole("button", { name: "Close Discover", exact: true }).click();
+    await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
+    await expect(page.locator('[data-ui="mcp-server-row"]')).not.toHaveClass(/outline-kumo-ring/);
   } finally {
     await upstream.stop();
   }
@@ -275,15 +369,24 @@ for (const kind of ["oauth", "bearer", "none"] as const) {
       if (await respondDefinition(route, path)) return;
       const id = path.split("/")[4] ?? "";
       const list = fixtureEntries(id);
-      if (path.endsWith("/mcp-servers")) {
-        if (method !== "GET") list.push({ ...binding });
-        await route.fulfill({ json: method === "GET" ? { servers: list } : list[0] });
-        return;
-      }
+      if (await respondCollection(route, path, method, list)) return;
+      if (await respondRemoval(route, path, method, list)) return;
       const current = list[0];
       if (!current) throw new Error("Missing fixture binding");
       await respondBinding(route, current, path);
     });
+    async function respondCollection(route: Route, path: string, method: string, list: (typeof binding)[]) {
+      if (!path.endsWith("/mcp-servers")) return false;
+      if (method !== "GET") list.push({ ...binding });
+      await route.fulfill({ json: method === "GET" ? { servers: list } : list[0] });
+      return true;
+    }
+    async function respondRemoval(route: Route, path: string, method: string, list: (typeof binding)[]) {
+      if (method !== "DELETE" || !path.endsWith(serverId)) return false;
+      list.splice(0);
+      await route.fulfill({ status: 204 });
+      return true;
+    }
     function fixtureEntries(id: string) {
       const list = entries.get(id) ?? [];
       entries.set(id, list);
@@ -368,10 +471,10 @@ for (const kind of ["oauth", "bearer", "none"] as const) {
         await expect(dialog.getByRole("radio")).toHaveCount(0);
         await input.fill("fixture-key");
         await page.keyboard.press("Enter");
-        await expect(dialog).toBeHidden();
+        if (source !== "discover") await expect(dialog).toBeHidden();
       }
       if (kind !== "oauth") await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
-      expect(entries.get(id)).toHaveLength(1);
+      expect(entries.get(id)).toHaveLength(kind === "oauth" && source === "discover" ? 0 : 1);
     }
     expect(writes.filter((path) => path === "/api/v1/mcp-servers")).toHaveLength(0);
     expect(writes.filter((path) => path.endsWith("/mcp-servers"))).toHaveLength(2);
@@ -430,4 +533,306 @@ for (const width of [320, 390, 768, 1440]) {
       await upstream.stop();
     }
   });
+}
+
+test("OAuth callback survives a provider isolating its browsing context", async ({ page }) => {
+  const upstream = await peer("oauth", true);
+  try {
+    const current = await agent(page);
+    const opening = page.waitForEvent("popup");
+    const dialog = await openAdd(page, current.id, upstream.url);
+    const popup = await opening;
+    await popup.getByRole("heading", { name: "Local consent fixture" }).waitFor();
+    // Let the closed-window monitor run while the provider applies its isolation policy.
+    await popup.waitForTimeout(1200);
+    await expect(dialog).toContainText("Complete sign-in in the authorization window.");
+    await popup.getByRole("link", { name: "Approve", exact: true }).click();
+    await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
+  } finally {
+    await upstream.stop();
+  }
+});
+
+test("mobile Discover restores search after cancellation, browser Back, and successful consent", async ({ page }) => {
+  const upstream = await peer("oauth");
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const current = await agent(page);
+    const serverId = await discoverPeer(page, current, upstream.url);
+    await page.goto(`/agents/${current.id}/mcp`);
+    await page.getByRole("button", { name: "Discover", exact: true }).click();
+    const discover = page.getByRole("dialog", { name: "Discover", exact: true });
+    await discover.getByLabel("Search connectors", { exact: true }).fill("Linear");
+    await expectAccessible(page);
+    await page.screenshot({ path: test.info().outputPath("discover-add-icon-mobile.png") });
+    await discover.getByRole("button", { name: "Add: Linear", exact: true }).click();
+    await page.getByRole("link", { name: "Cancel sign-in" }).click();
+    await expect(discover.getByLabel("Search connectors", { exact: true })).toHaveValue("Linear");
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+    await discover.getByRole("button", { name: "Add: Linear", exact: true }).click();
+    await page.getByRole("heading", { name: "Local consent fixture" }).waitFor();
+    await page.goBack();
+    await expect(discover.getByLabel("Search connectors", { exact: true })).toHaveValue("Linear");
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+    await discover.getByRole("button", { name: "Add: Linear", exact: true }).click();
+    await page.getByRole("link", { name: "Approve", exact: true }).click();
+    await expect(discover).toContainText("Connected");
+    await expect(discover.getByLabel("Search connectors", { exact: true })).toHaveValue("Linear");
+    expect((await mounts(page, current.id))[0]?.mcpServerId).toBe(serverId);
+    await expectAccessible(page);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: test.info().outputPath("discover-oauth-mobile-connected.png") });
+  } finally {
+    await upstream.stop();
+  }
+});
+
+test("explicit cancellation removes new setup and ignores a late callback", async ({ page }) => {
+  const upstream = await peer("oauth");
+  try {
+    const current = await agent(page);
+    const opening = page.waitForEvent("popup");
+    const dialog = await openAdd(page, current.id, upstream.url);
+    const popup = await opening;
+    const approve = await popup.getByRole("link", { name: "Approve", exact: true }).getAttribute("href");
+    if (!approve) throw new Error("Missing local callback");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).first().click();
+    await expect(dialog).toContainText("Sign-in was cancelled. You can try again.");
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+    await page.request.get(approve);
+    expect(await mounts(page, current.id)).toHaveLength(0);
+  } finally {
+    await upstream.stop();
+  }
+});
+
+test("changing Add custom input still cancels the setup it created", async ({ page }) => {
+  const upstream = await peer("none");
+  try {
+    const current = await agent(page);
+    upstream.unavailable(true);
+    const dialog = await openAdd(page, current.id, upstream.url);
+    await expect(dialog).toContainText("Couldn’t load tools. Try again.");
+    expect(await mounts(page, current.id)).toHaveLength(1);
+    await dialog.getByLabel("Connector URL", { exact: true }).fill("https://another.example/mcp");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+  } finally {
+    await upstream.stop();
+  }
+});
+
+for (const returnMode of ["mobile", "blocked popup"] as const) {
+  test(`Tools OAuth restores search and scroll with ${returnMode}`, async ({ page }) => {
+    const upstream = await peer("oauth", false, 20);
+    try {
+      const current = await agent(page);
+      const opening = page.waitForEvent("popup");
+      await openAdd(page, current.id, upstream.url);
+      await (await opening).getByRole("link", { name: "Approve", exact: true }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.locator('[data-ui="mcp-server-list"]')).toContainText("Connected");
+      const serverId = (await mounts(page, current.id))[0]?.mcpServerId;
+      if (!serverId) throw new Error("Missing connected fixture");
+      const name = (
+        (await (await page.request.get(`/api/v1/mcp-servers/${serverId}`)).json()).server as { name: string }
+      ).name;
+      upstream.expire();
+      await page.request.post(`/api/v1/agents/${current.id}/mcp-servers/${serverId}/probe`, {
+        headers: current.headers,
+      });
+      // Probe failures retain tools. Model the refresh worker's expired status at the UI boundary;
+      // the authorization, callback and subsequent probe still run through the real stack.
+      await page.route(`**/api/v1/agents/${current.id}/mcp-servers`, async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        for (const entry of body.servers) {
+          if (entry.mcpServerId === serverId && entry.authorization?.probeState === "failed")
+            entry.authorization.status = "expired";
+        }
+        await route.fulfill({ response, json: body });
+      });
+      await page.setViewportSize({ width: returnMode === "mobile" ? 390 : 1440, height: 844 });
+      await page.reload();
+      await page.getByRole("button", { name, exact: true }).click();
+      await page.getByRole("button", { name: "Tools", exact: true }).click();
+      await page.getByRole("textbox", { name: "Search tools", exact: true }).fill("fixture");
+      const toolList = page.getByRole("region", { name: "Tools discovered with this Agent’s credential", exact: true });
+      await toolList.hover();
+      await page.mouse.wheel(0, 200);
+      await expect.poll(() => toolList.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      const scrollTop = await toolList.evaluate((element) => element.scrollTop);
+      if (returnMode === "blocked popup")
+        await page.evaluate(() => {
+          window.open = () => null;
+        });
+      const reconnect = page.getByRole("dialog").getByRole("button", { name: "Reconnect", exact: true });
+      await expect(reconnect).toBeVisible();
+      await reconnect.click();
+      await expect(
+        page.getByRole("dialog").getByRole("heading", { name: "Authentication", exact: true }),
+      ).toBeVisible();
+      await reconnect.click();
+      if (returnMode === "blocked popup")
+        await page.getByRole("button", { name: "Open authorization page", exact: true }).click();
+      await page.getByRole("link", { name: "Approve", exact: true }).click();
+      await expect(page.getByRole("textbox", { name: "Search tools", exact: true })).toHaveValue("fixture");
+      await expect.poll(() => toolList.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+    } finally {
+      await upstream.stop();
+    }
+  });
+}
+
+const discoverCopy = {
+  en: {
+    title: "Discover",
+    empty: "No connectors yet",
+    close: "Close Discover",
+    search: "Search connectors",
+    add: "Add: Linear",
+    preparing: "Preparing sign-in…",
+    popupTitle: "Connect Linear",
+    opening: "Opening authorization page…",
+    failed: "Couldn’t start sign-in. Try again.",
+  },
+  zh: {
+    title: "发现",
+    empty: "暂无连接器",
+    close: "关闭 发现",
+    search: "搜索连接器",
+    add: "添加: Linear",
+    preparing: "正在准备授权…",
+    popupTitle: "连接 Linear",
+    opening: "正在打开授权页面…",
+    failed: "无法启动登录，请重试。",
+  },
+} as const;
+
+async function expectAddContrast(button: import("@playwright/test").Locator) {
+  const colors = await button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const background =
+      style.backgroundColor === "rgba(0, 0, 0, 0)"
+        ? getComputedStyle(element.closest("li") as HTMLElement).backgroundColor
+        : style.backgroundColor;
+    return { foreground: style.color, background };
+  });
+  const luminance = (color: string) => {
+    const values = (color.match(/[\d.]+/g) ?? [])
+      .slice(0, 3)
+      .map(Number)
+      .map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+    return (values[0] ?? 0) * 0.2126 + (values[1] ?? 0) * 0.7152 + (values[2] ?? 0) * 0.0722;
+  };
+  const foreground = luminance(colors.foreground);
+  const background = luminance(colors.background);
+  expect(
+    (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+    "add icon contrast",
+  ).toBeGreaterThanOrEqual(3);
+  return colors;
+}
+
+for (const locale of ["en", "zh"] as const) {
+  for (const width of [320, 390, 768, 1440]) {
+    test(`Discover visual and interaction states in ${locale} at ${width}px`, async ({ page }) => {
+      const upstream = await peer("oauth");
+      let release = () => {};
+      try {
+        await page.addInitScript((language) => localStorage.setItem("PARAGLIDE_LOCALE", language), locale);
+        await page.setViewportSize({ width, height: 844 });
+        const current = await agent(page);
+        await discoverPeer(page, current, upstream.url);
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        upstream.failRegistrationAfter(gate);
+        await page.goto(`/agents/${current.id}/mcp`);
+        const copy = discoverCopy[locale];
+        await expect(page.getByRole("heading", { name: copy.empty, exact: true })).toBeVisible();
+        await expect(page.locator('[data-ui="mcp-quick-start"]')).toHaveCount(0);
+        await expectNoPageOverflow(page);
+        await expectAccessible(page);
+        await page.screenshot({ path: test.info().outputPath(`empty-${locale}-${width}.png`) });
+        await page.getByRole("button", { name: copy.title, exact: true }).click();
+        const dialog = page.getByRole("dialog", { name: copy.title, exact: true });
+        await dialog.getByLabel(copy.search, { exact: true }).fill("Linear");
+        const add = dialog.getByRole("button", { name: copy.add, exact: true });
+        const box = await add.boundingBox();
+        if (!box) throw new Error("Missing add control");
+        expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(width < 768 ? 44 : 24);
+        const addColors = await expectAddContrast(add);
+        await add.hover();
+        await expectAddContrast(add);
+        await add.focus();
+        await page.keyboard.press("Tab");
+        await expect(dialog.getByRole("button", { name: copy.close, exact: true })).toBeFocused();
+        await page.keyboard.press("Shift+Tab");
+        await expect(add).toBeFocused();
+        const focus = await add.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { visible: element.matches(":focus-visible"), outline: style.outlineStyle, shadow: style.boxShadow };
+        });
+        expect(focus.visible).toBe(true);
+        expect(focus.outline !== "none" || focus.shadow !== "none", "visible keyboard focus").toBe(true);
+        await expectWithinViewport(dialog);
+        await expectWithinViewport(add);
+        await expectNoPageOverflow(page);
+        await expectAccessible(page);
+        await dialog.screenshot({ path: test.info().outputPath(`discover-${locale}-${width}-ready.png`) });
+        const opening = width > 640 ? page.waitForEvent("popup") : undefined;
+        await add.click();
+        await expect(dialog.getByText(copy.preparing, { exact: true })).toBeVisible();
+        await expect(add).toBeDisabled();
+        await expectWithinViewport(dialog);
+        await expectAccessible(page);
+        await dialog.screenshot({ path: test.info().outputPath(`discover-${locale}-${width}-preparing.png`) });
+        if (opening) {
+          const popup = await opening;
+          await page.context().unroute("**/api/v1/mcp-servers");
+          await expect(popup).toHaveTitle(`${copy.popupTitle} · OpenTag`);
+          await expect(popup.getByRole("heading", { name: copy.popupTitle, exact: true })).toBeVisible();
+          await expect(popup.getByRole("status")).toHaveText(copy.opening);
+          await expect(popup.getByText("Discover", { exact: false })).toHaveCount(0);
+          await expect
+            .poll(() => popup.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
+            .toBeGreaterThan(0);
+          await expect(popup.getByRole("heading", { name: copy.popupTitle, exact: true })).toHaveCSS(
+            "font-size",
+            "18px",
+          );
+          await expect(popup.locator("main")).toHaveCSS("align-items", "center");
+          await expect(popup.locator('div[role="status"]')).toHaveCSS("display", "flex");
+          await expect(popup.locator('div[role="status"] svg')).toHaveCSS("color", addColors.foreground);
+          await expect
+            .poll(() =>
+              popup.evaluate(() =>
+                Array.from(document.fonts).some((font) => font.family === "Manrope" && font.status === "loaded"),
+              ),
+            )
+            .toBe(true);
+          await expectAccessible(popup);
+          await expectNoPageOverflow(popup);
+          await popup.screenshot({ path: test.info().outputPath(`authorization-${locale}-${width}-preparing.png`) });
+        }
+        release();
+        await expect(dialog.getByRole("alert")).toContainText(copy.failed);
+        await expect(add).toBeEnabled();
+        await expect.poll(() => mounts(page, current.id)).toHaveLength(0);
+        await expect(dialog.getByLabel(copy.search, { exact: true })).toHaveValue("Linear");
+        await expectAccessible(page);
+        await expectNoPageOverflow(page);
+        await dialog.screenshot({ path: test.info().outputPath(`discover-${locale}-${width}-error.png`) });
+      } finally {
+        release();
+        await upstream.stop();
+      }
+    });
+  }
 }

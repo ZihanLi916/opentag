@@ -8,6 +8,8 @@ import {
   useMcpConnectionOperation,
 } from "../mcp-connection.js";
 import { allowsOAuthDiscovery, connectionAuthKind } from "../mcp-connection-model.js";
+import { mcpOAuthIdentity } from "../mcp-oauth-identity.js";
+import { closeMcpOAuthWindow, prepareMcpOAuthWindow } from "../mcp-oauth-window.js";
 
 /** Runs on the page so closing Discover cannot interrupt a connection or hide its error. */
 export function useMcpCatalogConnection(agentId: string) {
@@ -25,17 +27,27 @@ export function useMcpCatalogConnection(agentId: string) {
   }, []);
   const connect = async (binding: MCPAgentServer, token?: string, definition?: MCPServer) => {
     if (inFlight.current || !binding.enabled) return "busy" as const;
+    const oauthWindow =
+      connectionAuthKind(binding.effective.url, binding, definition) === "oauth"
+        ? prepareMcpOAuthWindow(mcpOAuthIdentity(binding.effective.url, binding.name))
+        : undefined;
     inFlight.current = true;
     setConnectingId(binding.mcpServerId);
     setFailure(undefined);
     try {
       const attempt = await resolveAttempt(binding, definition, attempts.current.get(binding.mcpServerId));
       attempts.current.set(binding.mcpServerId, attempt);
-      const result = await operation(attempt, { token, source: "authorize", isAlive: () => alive.current });
+      const result = await operation.run(attempt, {
+        token,
+        source: "authorize",
+        isAlive: () => alive.current,
+        oauthWindow,
+      });
       return alive.current ? result : ("busy" as const);
     } catch (cause) {
       return reportFailure(binding, cause);
     } finally {
+      closeMcpOAuthWindow(oauthWindow?.popup);
       inFlight.current = false;
       if (alive.current) setConnectingId(undefined);
     }
@@ -47,6 +59,7 @@ export function useMcpCatalogConnection(agentId: string) {
   }
   return {
     connect,
+    oauth: operation.oauth,
     connectingId,
     failure,
     clearFailure: () => setFailure(undefined),

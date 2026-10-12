@@ -10,8 +10,12 @@ import { Button, Dialog } from "../../ui/design-system.js";
 import { McpDialogTitle } from "./mcp-dialog-title.js";
 import { McpAuthFields } from "./mcp-form.js";
 import { type AuthDraft, actionError, authDraft } from "./mcp-form-model.js";
+import { McpOAuthControls } from "./mcp-oauth-controls.js";
+import { mcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { useMcpOAuthSession } from "./mcp-oauth-session.js";
 import { canRevoke } from "./mcp-page-model.js";
-import { useMcpServerDetail, useSetMcpAuthorization, useStartMcpOAuth } from "./mcp-queries.js";
+import { useMcpServerDetail, useSetMcpAuthorization } from "./mcp-queries.js";
+import type { McpReturnContext } from "./mcp-return-context.js";
 import { McpConfirmDialog } from "./mcp-server-dialogs.js";
 
 export function validAuth(draft: AuthDraft): boolean {
@@ -24,12 +28,6 @@ export function validAuth(draft: AuthDraft): boolean {
     return false;
   return true;
 }
-/** The OAuth start request for one Server: the card's declared scopes only when it has any. */
-function oauthStartInput(mcpServerId: string, scopes?: readonly string[]): { mcpServerId: string; scopes?: string[] } {
-  if (!scopes || scopes.length === 0) return { mcpServerId };
-  return { mcpServerId, scopes: [...scopes] };
-}
-
 /**
  * Authorization and credential entry stay Agent-scoped. Settings saves connection parameters
  * separately before this flow begins.
@@ -40,18 +38,20 @@ function oauthStartInput(mcpServerId: string, scopes?: readonly string[]): { mcp
  */
 export function useMcpAuthorization(agentId: string) {
   const authorize = useSetMcpAuthorization(agentId);
-  const oauth = useStartMcpOAuth(agentId);
-  return async (
+  const oauth = useMcpOAuthSession(agentId);
+  const run = async (
     entry: MCPAgentServer,
     draft: AuthDraft,
     oauthScopes?: readonly string[],
-    options?: { onBeforeOAuth?: () => void },
+    options?: { returnContext?: () => McpReturnContext },
   ) => {
     if (draft.kind === "oauth") {
-      const result = await oauth.mutateAsync(oauthStartInput(entry.mcpServerId, oauthScopes));
-      options?.onBeforeOAuth?.();
-      window.location.assign(result.authorizationUrl);
-      return;
+      const context: McpReturnContext = options?.returnContext?.() ?? {
+        agentId,
+        serverId: entry.mcpServerId,
+        source: "edit",
+      };
+      return await oauth.start(context, oauthScopes, undefined, mcpOAuthIdentity(entry.effective.url, entry.name));
     }
     return authorize.mutateAsync({
       mcpServerId: entry.mcpServerId,
@@ -59,6 +59,7 @@ export function useMcpAuthorization(agentId: string) {
       ...(draft.kind === "bearer" ? { bearerKey: draft.token } : {}),
     });
   };
+  return { run, oauth };
 }
 export function McpAuthorizeDialog({
   agentId,
@@ -67,7 +68,7 @@ export function McpAuthorizeDialog({
   onClose,
   onBack,
   onAuthorized,
-  onBeforeOAuth,
+  returnContext,
   initialError,
   presetAuthKind,
 }: {
@@ -77,7 +78,7 @@ export function McpAuthorizeDialog({
   onClose: () => void;
   onBack?: () => void;
   onAuthorized: () => void;
-  onBeforeOAuth?: () => void;
+  returnContext?: () => McpReturnContext;
   initialError?: string;
   presetAuthKind?: MCPAuthKind;
 }) {
@@ -105,8 +106,8 @@ export function McpAuthorizeDialog({
     setBusy(true);
     setError(undefined);
     try {
-      await authorize(entry, draft, undefined, { onBeforeOAuth });
-      if (draft.kind !== "oauth") onAuthorized();
+      const result = await authorize.run(entry, draft, undefined, { returnContext });
+      if (draft.kind !== "oauth" || result === "authorized") onAuthorized();
     } catch (cause) {
       setError(actionError(cause, m.mcp_authorize_failed()));
     } finally {
@@ -153,6 +154,7 @@ export function McpAuthorizeDialog({
       onClose={onClose}
       onBack={onBack}
     >
+      <McpOAuthControls session={authorize.oauth} className="mb-4" />
       <form
         onSubmit={(event) => {
           event.preventDefault();
