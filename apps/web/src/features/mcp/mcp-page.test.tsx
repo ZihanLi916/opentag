@@ -145,6 +145,8 @@ describe("MCP daily use", () => {
     expect(screen.getAllByRole("button", { name: "Add server" })).toHaveLength(1);
     await openAdd();
     expect(screen.getByRole("dialog", { name: "Add server" })).toBeTruthy();
+    expect(screen.getByLabelText("Server URL")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Discover" })).toBeNull();
   });
   it("shows tool truncation only as a disclosure in the tool browser", async () => {
     stub([entry({ authorization: { ...authorization(), toolsCount: 200, toolsTruncated: true } })]);

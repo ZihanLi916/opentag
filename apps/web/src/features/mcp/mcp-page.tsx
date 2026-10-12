@@ -10,7 +10,7 @@ import { queryKeys } from "../../query/keys.js";
 import { Banner, Button, Icon, Loader, Text } from "../../ui/design-system.js";
 import { readImBinding } from "../agents/agent-queries.js";
 import { agentSettingsSectionLink } from "../agents/agent-routes.js";
-import { type AddSource, McpAddDialog } from "./mcp-add-dialog.js";
+import { McpAddDialog } from "./mcp-add-dialog.js";
 import { McpAuthorizeDialog } from "./mcp-authorize-dialog.js";
 import { actionError } from "./mcp-form-model.js";
 import { readMcpOAuthOutcome } from "./mcp-oauth-outcome.js";
@@ -21,7 +21,7 @@ import { McpSettingsDialog } from "./mcp-settings-dialog.js";
 
 type Panel =
   | { kind: "none" }
-  | { kind: "add"; source?: AddSource }
+  | { kind: "add"; serverId?: string; authenticationError?: string }
   | { kind: ServerAction | "tools"; entry: MCPAgentServer; context?: McpReturnContext; authenticationError?: string };
 /** One Agent's connections; runtime access remains determined by the server's actual authorization. */
 export function McpPage({ agentId }: { agentId: string }) {
@@ -37,9 +37,9 @@ export function McpPage({ agentId }: { agentId: string }) {
   const [panel, setPanel] = useState<Panel>({ kind: "none" });
   const [highlight, setHighlight] = useState(outcome?.mcpServerId);
   const [completed, setCompleted] = useState<{ id: string; authorized: boolean }>();
-  const [dismissed, setDismissed] = useState(Boolean(returnContext));
+  const [dismissed, setDismissed] = useState(hideReturnedCompletion(returnContext, outcome?.outcome.kind === "error"));
   useEffect(() => {
-    if (!returnContext || restored.current || mounted.isPending) return;
+    if (!returnContext || returnContext.source === "add" || restored.current || mounted.isPending) return;
     const entry = servers.find((server) => server.mcpServerId === returnContext.serverId);
     if (!entry) return;
     restored.current = true;
@@ -50,6 +50,14 @@ export function McpPage({ agentId }: { agentId: string }) {
       context: returnContext,
       authenticationError: outcome?.outcome.kind === "error" ? m.mcp_oauth_return_failed() : undefined,
     });
+  }, [returnContext, outcome, mounted.isPending, servers]);
+  useEffect(() => {
+    if (returnContext?.source !== "add" || restored.current || mounted.isPending) return;
+    const entry = servers.find((server) => server.mcpServerId === returnContext.serverId);
+    if (!entry) return;
+    restored.current = true;
+    if (outcome?.outcome.kind === "error")
+      setPanel({ kind: "add", serverId: entry.mcpServerId, authenticationError: m.mcp_oauth_return_failed() });
   }, [returnContext, outcome, mounted.isPending, servers]);
   const [removed, setRemoved] = useState<string>();
   const addTrigger = useRef<HTMLButtonElement>(null);
@@ -91,7 +99,7 @@ export function McpPage({ agentId }: { agentId: string }) {
           ref={addTrigger}
           variant="secondary"
           disabled={mounted.isPending || mounted.isError}
-          onClick={() => setPanel({ kind: "add", source: servers.length ? undefined : "discover" })}
+          onClick={() => setPanel({ kind: "add" })}
         >
           <Icon name="plus" />
           {m.mcp_create_action()}
@@ -244,7 +252,8 @@ function McpPanel({
         agentId={agentId}
         agentName={agentName}
         mounted={servers}
-        initialSource={panel.source}
+        initialServerId={panel.serverId}
+        initialError={panel.authenticationError}
         onClose={onClose}
         onAdded={(entry) => onCompleted(entry, false)}
         onLocate={onLocate}
@@ -355,4 +364,8 @@ function McpUseGuidance({ agentId, agentName, server }: { agentId: string; agent
       </Link>
     </>
   );
+}
+
+function hideReturnedCompletion(context: McpReturnContext | undefined, failed: boolean) {
+  return Boolean(context && (context.source !== "add" || failed));
 }
