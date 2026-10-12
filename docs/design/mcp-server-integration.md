@@ -1089,6 +1089,9 @@ The marketplace catalog is a curated set of remote Streamable HTTP Servers. The 
 source is retained for a future revision. The catalog continues to supply official service icons
 for existing connections and display data for the public catalog API.
 
+The page keeps one Add server action in its header; its empty state uses a compact, borderless icon
+and guidance. The action opens the same URL-and-shortcuts dialog for empty and populated Agents.
+
 The catalog is committed repository data in the `@opentag/mcp-presets` workspace, not a service:
 
 | Source | Holds |
