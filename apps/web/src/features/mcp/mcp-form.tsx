@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import * as m from "../../paraglide/messages.js";
 import { Button, Collapsible, Field, Icon, KumoInputControl, Radio } from "../../ui/design-system.js";
-import { type AuthDraft, type HeaderRow, newHeader, validHeaders } from "./mcp-form-model.js";
+import { type AuthDraft, type HeaderRow, newHeader } from "./mcp-form-model.js";
 import "./mcp.css";
 
 export function McpFooter({
@@ -91,41 +91,16 @@ export function McpHeaders({ rows, onChange }: { rows: HeaderRow[]; onChange: (r
     </div>
   );
 }
-export function McpTokenSettings({
-  header,
-  prefix,
-  onHeader,
-  onPrefix,
-}: {
-  header: string;
-  prefix: string;
-  onHeader: (value: string) => void;
-  onPrefix: (value: string) => void;
-}) {
-  return (
-    <div className="mcp-token-fields">
-      <Field htmlFor="mcp-auth-header" label={m.mcp_edit_auth_header_label()}>
-        <KumoInputControl id="mcp-auth-header" value={header} onChange={(event) => onHeader(event.target.value)} />
-      </Field>
-      <Field htmlFor="mcp-auth-scheme" label={m.mcp_edit_auth_scheme_label()} hint={m.mcp_edit_auth_scheme_help()}>
-        <KumoInputControl id="mcp-auth-scheme" value={prefix} onChange={(event) => onPrefix(event.target.value)} />
-      </Field>
-    </div>
-  );
-}
 export function McpAuthFields({
   draft,
   onChange,
   label = m.mcp_auth_label(),
   variant = "setup",
-  connectionSettings = true,
 }: {
   draft: AuthDraft;
   onChange: (draft: AuthDraft) => void;
-  existing?: boolean;
   label?: string;
   variant?: "setup" | "settings";
-  connectionSettings?: boolean;
 }) {
   const help = authMethodHelp(draft.kind, variant);
   const choiceClass = variant === "settings" ? "mcp-auth-choice" : undefined;
@@ -153,31 +128,7 @@ export function McpAuthFields({
         {variant === "setup" ? <p className="mt-3 text-xs leading-relaxed text-kumo-subtle">{help}</p> : null}
       </div>
       <McpAuthMethodDetails draft={draft} onChange={onChange} help={help} variant={variant} />
-      {connectionSettings ? <McpAuthConnectionSettings draft={draft} onChange={onChange} /> : null}
     </>
-  );
-}
-
-function McpAuthConnectionSettings({ draft, onChange }: { draft: AuthDraft; onChange: (draft: AuthDraft) => void }) {
-  const authHeader = draft.kind === "oauth" ? "authorization" : draft.kind === "bearer" ? draft.authHeader : "";
-  return (
-    <McpDisclosure label={m.mcp_advanced()}>
-      <div className="grid gap-4">
-        {draft.kind === "bearer" ? (
-          <McpTokenSettings
-            header={draft.authHeader}
-            prefix={draft.authScheme}
-            onHeader={(authHeader) => onChange({ ...draft, authHeader })}
-            onPrefix={(authScheme) => onChange({ ...draft, authScheme })}
-          />
-        ) : null}
-        <span className="text-sm font-medium">{m.mcp_edit_advanced()}</span>
-        <McpHeaders rows={draft.headers} onChange={(headers) => onChange({ ...draft, headers })} />
-        {!validHeaders(draft.headers, authHeader) ? (
-          <p className="text-xs text-kumo-danger">{m.mcp_headers_invalid()}</p>
-        ) : null}
-      </div>
-    </McpDisclosure>
   );
 }
 

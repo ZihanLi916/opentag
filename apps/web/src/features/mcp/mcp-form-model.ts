@@ -74,15 +74,6 @@ export function authDraft(config: MCPEffectiveConfig = defaultConnection, kind: 
     headers: headerRows(config.extraHeaders),
   };
 }
-export function authBindingPatch(draft: AuthDraft, config: MCPEffectiveConfig): UpdateMCPBindingRequest {
-  return {
-    ...(draft.kind === "bearer" && draft.authHeader !== config.authHeader ? { authHeader: draft.authHeader } : {}),
-    ...(draft.kind === "bearer" && draft.authScheme !== config.authScheme ? { authScheme: draft.authScheme } : {}),
-    ...(headersKey(headersFromRows(draft.headers)) !== headersKey(config.extraHeaders)
-      ? { extraHeaders: headersFromRows(draft.headers) }
-      : {}),
-  };
-}
 export type ConnectionField = "url" | "authHeader" | "authScheme";
 export type SettingsDraft = Pick<MCPEffectiveConfig, ConnectionField> & { headers: HeaderRow[] };
 export function settingsDraft(entry: MCPAgentServer): SettingsDraft {
