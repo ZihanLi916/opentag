@@ -899,12 +899,9 @@ export class ImDeliveryWorker {
       return;
     }
     validateUndispatchedContent(row);
-    /*
-     * Cloud dispatch uses the per-Sandbox owner and short claim/operation deadlines, not the
-     * Local runtime registry or queue-age TTL. Unready Runners retry in short attempts; ingress
-     * expiresAt bounds undispatched input, the runtime budget bounds frozen dispatches, and
-     * accepted-unreported custody never expires.
-     */
+    // Cloud dispatch uses its Sandbox owner and short deadlines/retries, not Local admission.
+    // Ingress expiry bounds undispatched input; runtime budgets bound frozen dispatches.
+    // Accepted-unreported custody never expires.
     await this.#database
       .update(imMessageDeliveries)
       .set({ executionOrigin: row.computer.kind })
