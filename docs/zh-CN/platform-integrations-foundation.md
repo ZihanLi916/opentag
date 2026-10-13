@@ -2,6 +2,8 @@
 
 [English](../platform-integrations-foundation.md)
 
+> Last synced with: 2026-10-13
+
 OpenTag 自己管理 GitHub App、Slack 与飞书凭证。Server 组合集成管理、执行授权、短期凭证能力和平台代理；可信 Runner 向原生 CLI 进程提供 execution-local handle。
 
 ## 身份与存储
@@ -23,6 +25,15 @@ GitHub 连接属于 Account、GitHub host 和 App；同一命名空间只有一�
 ## 管理与执行
 
 按 `.env.example` 完整配置 GitHub App，OAuth 回调必须准确匹配 `OPENTAG_PUBLIC_URL` 下的回调路径。Account 页面连接或重新授权 GitHub；Agent 集成页面选择仓库、角色、权限、发布模式、Tree 分支与所有者设定的任务委托。Server 执行 CSRF、PKCE、App 身份校验、webhook 签名验证和维护 worker；未配置 App 时界面显示不可用。仓库发现每个 installation 最多列出十页（1000 个仓库），未能完整列出的 installation 在 `truncatedInstallations` 中显式标注。绑定写入对请求的每个绑定执行 GitHub 实时准入验证，超出单次验证可覆盖页数的配置会被拒绝；委托的 IM 绑定必须是当前 Account 持有的有效绑定，在同一事务中校验。管理路由将 GitHub 上游失败映射为有界的公开错误码。
+
+账户的 GitHub 区块和 Agent 仓库页在连接有效时提供安装和刷新操作，已有个人、组织或暂停安装记录时也会保留。服务端通过 GitHub 查询配置的 App，要求返回的 App ID 和 OAuth Client ID 与部署配置一致，并验证 App slug 安全；元数据缺失或不匹配时拒绝跳转。已登录账户因此会安装当前部署所配置的 GitHub App，无需新增设置页面或 App slug 配置。安装在新标签页中打开；完成后刷新原有区块以发现仓库。打开安装链接本身不会授予仓库或 Agent 访问权限。
+
+刷新保留操作控件的焦点，通过常驻实时状态区播报发现的安装与仓库数量。连接变化导致控件消失时，如果用户没有移到其他位置，焦点会移到结果区。刷新失败会保留原列表供重试。Agent 刷新、分页、授权和保存互斥；只有真实的仓库授权写入才显示保存状态。分页完成及重试也会保留合理的焦点位置。刷新不会写入仓库授权。
+
+Agent 仓库发现会协调本地草稿与最新已保存配置：未修改的授权采用服务端变化，已编辑字段、待添加发送者文本、新勾选和明确取消勾选会在刷新及分页后保留。后续分页会初始化所发现的已有 Agent 授权。刷新页之外的已编辑仓库仍显示；被勾选的草稿须重新发现且权限及安装状态有效后才能保存。取消勾选再勾选会恢复已输入字段。已移除的委托目标仍可由用户移除，不会直接从编辑器消失。保存请求期间的新编辑会保留，旧 Agent 的请求结果不能覆盖当前 Agent 的编辑器。GitHub 身份变化时，未保存草稿会保持隔离，须由所有者明确放弃后才能切换；刷新不会自动把草稿转移到另一身份。草稿保留仅限当前已挂载的编辑器，不写入浏览器存储。
+
+保存只修改已编辑的授权，保留额外角色及其他 Agent 的授权。绑定 ID 始终对应同一 installation 与仓库组合；切换 installation 会创建新的绑定身份。多个新绑定的变更检查使用不同的比较占位 ID，且不会把这些占位 ID 持久化。
+
 
 运行期协商 `runtime.runtimeCredential` 与 `runtime.providerProxy`。开启 execution 绑定 Account、Agent revision、已接受任务来源、Session placement、当前 Computer 连接，以及 Cloud Sandbox generation。猜到 Session ID 或来自无关 IM 发送者都不足以取得权限。签发、续期、每次请求和长流均重新核验。
 
