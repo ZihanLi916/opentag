@@ -193,6 +193,8 @@ async function currentBindingId(adapter: AgentSetupAdapter): Promise<string> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Existing OAuth recovery remains usable against a server predating the custom App endpoint.
+  vi.spyOn(browserApi, "slackConfiguration").mockRejectedValue(new ApiError(404, "old server"));
 });
 
 afterEach(() => {
@@ -501,7 +503,7 @@ describe("AgentSetupPage stages", () => {
     const alert = screen.getByRole("alert");
     expect(messaging?.contains(alert)).toBe(true);
     expect(alert.textContent).toBe(
-      "This Slack workspace is already connected to another Agent. Disconnect it from that Agent, or choose a different workspace.",
+      "This Slack App is already connected to another Agent. Create another App for this Agent; you can use the same workspace.",
     );
   });
 
@@ -553,7 +555,7 @@ describe("AgentSetupPage stages", () => {
 
     expect(screen.getByRole("heading", { name: "reviewer is ready." })).toBeTruthy();
     // Provider identity reaches the done screen from the snapshot, not from page state.
-    expect(screen.getByText("Tag @OpenTag in Slack to put it to work.")).toBeTruthy();
+    expect(screen.getByText("Message this Bot in Slack to put it to work.")).toBeTruthy();
     expect(onReady).toHaveBeenCalledWith(SETUP_AGENT_ID);
     expect(onReady).toHaveBeenCalledTimes(1);
   });
@@ -705,7 +707,7 @@ describe("preparation review regressions", () => {
 
     expect(
       screen.getByText(
-        "In Slack, add OpenTag to a channel and send it a message, or message it directly, to finish the connection check.",
+        "In Slack, add this Bot to a channel and send it a message, or message it directly, to finish the connection check.",
       ),
     ).toBeTruthy();
   });
@@ -977,6 +979,7 @@ describe("AgentSetupPage transitions", () => {
       const start = vi.spyOn(memory.adapter, "startSlackInstall");
       renderSetup(memory.adapter);
       await settle();
+      await advance(1);
 
       fireEvent.click(screen.getByRole("button", { name: "Update permissions" }));
       await settle();

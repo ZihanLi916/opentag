@@ -13,7 +13,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../api.js";
+import { ApiError, browserApi } from "../api.js";
 import { AgentSetupPage, type AgentSetupPageProps, setupSnapshotIsTransitional } from "./agent-setup-page.js";
 import { deferred, SETUP_AGENT_ID, SETUP_COMPUTER_ID, setupAgent } from "./agent-setup-test-fixtures.js";
 import type { AgentSetupAdapter } from "./setup-adapter.js";
@@ -84,6 +84,7 @@ const onlineReviewMac = {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(browserApi, "slackConfiguration").mockRejectedValue(new ApiError(404, "old server"));
 });
 
 afterEach(() => {
@@ -339,7 +340,7 @@ describe("AgentSetupPage messaging recovery", () => {
     const unbind = vi.spyOn(memory.adapter, "unbindMessaging");
     renderSetup(memory.adapter);
     await settle();
-    expect(screen.getByText(/In Slack, add OpenTag to a channel/)).toBeTruthy();
+    expect(screen.getByText(/In Slack, add this Bot to a channel/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Slack" }));
     await settle();
@@ -371,6 +372,9 @@ describe("AgentSetupPage messaging recovery", () => {
     await settle();
 
     expect(screen.getByText("Slack reported a problem. Reconnect it to continue.")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Update permissions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Change bot" })).toBeNull();
@@ -408,7 +412,7 @@ describe("AgentSetupPage messaging recovery", () => {
       await settle();
 
       expect(screen.getByText(copy)).toBeTruthy();
-      expect(screen.queryByText(/In Slack, add OpenTag to a channel/)).toBeNull();
+      expect(screen.queryByText(/In Slack, add this Bot to a channel/)).toBeNull();
     },
   );
 

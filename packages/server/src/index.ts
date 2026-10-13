@@ -899,6 +899,7 @@ export async function startServer(): Promise<void> {
       logger: serviceLogger("slack-working-status"),
     });
     const slackConfigurationService = new SlackConfigurationService({
+      cipher: applicationCipher,
       onDiagnostic: reportDiagnostic,
       api: slackApi,
       database,
@@ -1119,6 +1120,11 @@ export async function startServer(): Promise<void> {
       machineAuthService,
       imBindingService,
       feishuSetupService,
+      slackConfiguration: {
+        service: slackConfigurationService,
+        publicOrigin: config.publicUrl,
+        officialSigningSecret: config.slackOAuth?.signingSecret,
+      },
       taskService,
       ...(slackOAuthService
         ? {
