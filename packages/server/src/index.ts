@@ -1024,6 +1024,13 @@ export async function startServer(): Promise<void> {
        * reach beyond the Google-hosted endpoints.
        */
       googleMcpClient: config.mcpGoogleOAuth,
+      /*
+       * The deployment's Canva Developer Portal client, present only when the
+       * OPENTAG_MCP_CANVA_CLIENT_* pair is configured. The flow offers it only to the Developer
+       * Portal endpoint that resolves Canva's issuer, and it also makes the catalog's Canva card
+       * create its Server on that endpoint.
+       */
+      canvaMcpClient: config.mcpCanvaOAuth,
     });
     const mcpRefreshWorker = new McpRefreshWorker({
       authorization: mcpAuthorization,

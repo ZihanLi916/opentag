@@ -1,14 +1,17 @@
 import type { McpCatalogEntry } from "@opentag/mcp-presets";
-import type { MCPAgentServer, MCPServer } from "@opentag/shared/browser";
+import { CANVA_DEVELOPER_PORTAL_MCP_URL, type MCPAgentServer, type MCPServer } from "@opentag/shared/browser";
 import { describe, expect, it } from "vitest";
 import {
   catalogEntryState,
+  catalogEntryUrls,
   comparableUrl,
   entriesInCategory,
   findAccountServer,
+  findCatalogBinding,
   findCatalogEntryByUrl,
   localizedText,
   matchesCatalogEntry,
+  resolveCatalogEntries,
 } from "./mcp-catalog-model.js";
 
 function catalogEntry(overrides: Partial<McpCatalogEntry> = {}): McpCatalogEntry {
@@ -188,5 +191,71 @@ describe("catalog service identity", () => {
     "not a url",
   ])("does not assign a product logo to %s", (url) => {
     expect(findCatalogEntryByUrl(url, [catalogEntry()])).toBeUndefined();
+  });
+});
+
+describe("deployment catalog endpoints", () => {
+  const canva = catalogEntry({ id: "canva", name: "canva", url: "https://mcp.canva.com/mcp" });
+  const notion = catalogEntry();
+
+  it("identifies an entry by its shipped endpoint and its deployment-client endpoint", () => {
+    expect(catalogEntryUrls(notion)).toEqual([notion.url]);
+    expect(catalogEntryUrls(canva)).toEqual([canva.url, CANVA_DEVELOPER_PORTAL_MCP_URL]);
+    expect(findCatalogEntryByUrl(CANVA_DEVELOPER_PORTAL_MCP_URL, [notion, canva])).toBe(canva);
+    expect(findCatalogEntryByUrl(`${CANVA_DEVELOPER_PORTAL_MCP_URL}/`, [notion, canva])).toBe(canva);
+    expect(findCatalogEntryByUrl("https://mcp.canva.com/mcp", [notion, canva])).toBe(canva);
+  });
+
+  it("keeps the catalog as shipped when the deployment replaces nothing", () => {
+    const entries = [notion, canva];
+    expect(resolveCatalogEntries(entries, [])).toBe(entries);
+  });
+
+  it("replaces only the named entry's endpoint and keeps its shipped identity", () => {
+    const resolved = resolveCatalogEntries(
+      [notion, canva],
+      [{ catalogId: "canva", url: CANVA_DEVELOPER_PORTAL_MCP_URL }],
+    );
+    expect(resolved[0]).toBe(notion);
+    expect(resolved[1]).toEqual({ ...canva, url: CANVA_DEVELOPER_PORTAL_MCP_URL, shippedUrl: canva.url });
+    // The preferred endpoint comes first, and the shipped one is never lost or repeated.
+    expect(catalogEntryUrls(resolved[1] as McpCatalogEntry)).toEqual([CANVA_DEVELOPER_PORTAL_MCP_URL, canva.url]);
+    expect(findCatalogEntryByUrl(canva.url, resolved)).toBe(resolved[1]);
+    expect(findCatalogEntryByUrl(CANVA_DEVELOPER_PORTAL_MCP_URL, resolved)).toBe(resolved[1]);
+  });
+
+  it("keeps an Account's waitlist Server serving the replaced entry", () => {
+    const served = resolveCatalogEntries([canva], [{ catalogId: "canva", url: CANVA_DEVELOPER_PORTAL_MCP_URL }])[0];
+    const waitlist = accountServer({ name: "canva", url: canva.url });
+    // Reusing it is what avoids a second Server named `canva`, which the Account's name constraint rejects.
+    expect(findAccountServer(served as McpCatalogEntry, [waitlist])).toBe(waitlist);
+    const portal = accountServer({ id: "22222222-2222-4222-8222-222222222222", url: CANVA_DEVELOPER_PORTAL_MCP_URL });
+    // When both exist, the preferred endpoint wins regardless of list order.
+    expect(findAccountServer(served as McpCatalogEntry, [waitlist, portal])).toBe(portal);
+  });
+
+  it("reports an Agent's working waitlist mount as added for the replaced entry", () => {
+    const served = resolveCatalogEntries([canva], [{ catalogId: "canva", url: CANVA_DEVELOPER_PORTAL_MCP_URL }])[0];
+    const waitlist = accountServer({ name: "canva", url: canva.url });
+    const working = mount({
+      mcpServerId: waitlist.id,
+      name: "canva",
+      effective: { ...mount().effective, url: canva.url },
+    });
+    expect(findCatalogBinding(served as McpCatalogEntry, [waitlist], [working])).toBe(working);
+    expect(catalogEntryState(served as McpCatalogEntry, [waitlist], [working])).toBe("added");
+    // The same holds when the Account list has not loaded and only the mount's URL is known.
+    expect(catalogEntryState(served as McpCatalogEntry, [], [working])).toBe("added");
+  });
+
+  it("refuses an endpoint the shared contract does not name for that entry", () => {
+    const entries = [notion, canva];
+    expect(resolveCatalogEntries(entries, [{ catalogId: "canva", url: "https://evil.example/mcp" }])).toEqual(entries);
+    expect(resolveCatalogEntries(entries, [{ catalogId: "notion", url: CANVA_DEVELOPER_PORTAL_MCP_URL }])).toEqual(
+      entries,
+    );
+    expect(resolveCatalogEntries(entries, [{ catalogId: "unknown", url: CANVA_DEVELOPER_PORTAL_MCP_URL }])).toEqual(
+      entries,
+    );
   });
 });
