@@ -869,7 +869,7 @@ export class OpenTagApi {
   createInternalSession(
     proof: string,
     input: SessionCliCreateRequest,
-    options?: RequestOptions,
+    options?: RequestOptions & { executionId?: string },
   ): Promise<SessionCliCommandResponse> {
     return this.#request(
       HTTP_PATHS.runtimeInternalSessions,
@@ -877,7 +877,11 @@ export class OpenTagApi {
       {
         method: "POST",
         body: JSON.stringify(input),
-        headers: { "content-type": "application/json", [SESSION_CLI_PROOF_HEADER]: proof },
+        headers: {
+          "content-type": "application/json",
+          [SESSION_CLI_PROOF_HEADER]: proof,
+          ...(options?.executionId ? { "x-opentag-execution-id": options.executionId } : {}),
+        },
       },
       options,
     );
@@ -886,7 +890,7 @@ export class OpenTagApi {
   sendSessionMessage(
     proof: string,
     input: SessionCliSendRequest,
-    options?: RequestOptions,
+    options?: RequestOptions & { executionId?: string },
   ): Promise<SessionCliCommandResponse> {
     return this.#request(
       HTTP_PATHS.runtimeSessionMessages,
@@ -894,7 +898,11 @@ export class OpenTagApi {
       {
         method: "POST",
         body: JSON.stringify(input),
-        headers: { "content-type": "application/json", [SESSION_CLI_PROOF_HEADER]: proof },
+        headers: {
+          "content-type": "application/json",
+          [SESSION_CLI_PROOF_HEADER]: proof,
+          ...(options?.executionId ? { "x-opentag-execution-id": options.executionId } : {}),
+        },
       },
       options,
     );
@@ -1146,7 +1154,7 @@ export class OpenTagApi {
   createRuntimeAgentSchedule(
     proof: string,
     input: CreateAgentScheduleRequest,
-    options?: RequestOptions,
+    options?: RequestOptions & { executionId?: string },
   ): Promise<AgentSchedule> {
     return this.#request(
       RUNTIME_AGENT_SCHEDULES_PATH,
@@ -1154,7 +1162,11 @@ export class OpenTagApi {
       {
         method: "POST",
         body: JSON.stringify(input),
-        headers: { "content-type": "application/json", [SESSION_CLI_PROOF_HEADER]: proof },
+        headers: {
+          "content-type": "application/json",
+          [SESSION_CLI_PROOF_HEADER]: proof,
+          ...(options?.executionId ? { "x-opentag-execution-id": options.executionId } : {}),
+        },
       },
       options,
     );
@@ -1191,7 +1203,7 @@ export class OpenTagApi {
     proof: string,
     scheduleId: string,
     input: UpdateAgentScheduleRequest,
-    options?: RequestOptions,
+    options?: RequestOptions & { executionId?: string },
   ): Promise<AgentSchedule> {
     return this.#request(
       runtimeAgentSchedulePath(scheduleId),
@@ -1199,7 +1211,11 @@ export class OpenTagApi {
       {
         method: "PATCH",
         body: JSON.stringify(input),
-        headers: { "content-type": "application/json", [SESSION_CLI_PROOF_HEADER]: proof },
+        headers: {
+          "content-type": "application/json",
+          [SESSION_CLI_PROOF_HEADER]: proof,
+          ...(options?.executionId ? { "x-opentag-execution-id": options.executionId } : {}),
+        },
       },
       options,
     );
@@ -1227,7 +1243,7 @@ export class OpenTagApi {
     proof: string,
     scheduleId: string,
     expectedRevision: number,
-    options?: RequestOptions,
+    options?: RequestOptions & { executionId?: string },
   ): Promise<AgentSchedule> {
     return this.#request(
       runtimeAgentScheduleResumePath(scheduleId),
@@ -1235,7 +1251,11 @@ export class OpenTagApi {
       {
         method: "POST",
         body: JSON.stringify({ expectedRevision }),
-        headers: { "content-type": "application/json", [SESSION_CLI_PROOF_HEADER]: proof },
+        headers: {
+          "content-type": "application/json",
+          [SESSION_CLI_PROOF_HEADER]: proof,
+          ...(options?.executionId ? { "x-opentag-execution-id": options.executionId } : {}),
+        },
       },
       options,
     );

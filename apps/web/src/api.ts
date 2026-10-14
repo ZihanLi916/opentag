@@ -99,7 +99,6 @@ import {
   feishuSetupAttemptCheckPath,
   feishuSetupAttemptPath,
   GITHUB_INTEGRATION_AUTHORIZATION_PATH,
-  GITHUB_INTEGRATION_BINDINGS_PATH,
   GITHUB_INTEGRATION_DISCONNECT_PATH,
   GITHUB_INTEGRATION_PATH,
   type GitHubConnectionStatus,
@@ -202,7 +201,6 @@ import {
   taskRepliesPath,
   type UnbindAgentMessagingRequest,
   type UpdateAgentRequest,
-  type UpdateGitHubConnectionBindingsRequest,
   type UpdateMCPBindingRequest,
   type UpdateMCPServerRequest,
   type UpdateSkillRequest,
@@ -735,14 +733,6 @@ export class BrowserApi {
 
   githubRepositories(cursor?: string): Promise<GitHubRepositoryDiscoveryPage> {
     return this.request(githubIntegrationRepositoriesPath(cursor), GitHubRepositoryDiscoveryPageSchema);
-  }
-
-  updateGitHubBindings(input: UpdateGitHubConnectionBindingsRequest): Promise<GitHubConnectionStatus> {
-    return this.request(GITHUB_INTEGRATION_BINDINGS_PATH, GitHubConnectionStatusSchema, {
-      method: "PUT",
-      body: JSON.stringify(input),
-      headers: { "content-type": "application/json", ...this.csrfHeaders() },
-    });
   }
 
   disconnectGitHub(): Promise<GitHubConnectionStatus | undefined> {
