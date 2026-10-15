@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeProxyAuthorization } from "../runtime-credentials/credential-broker.js";
 import type { ProviderProxyRequest, ProviderProxyResponse } from "../runtime-credentials/provider-proxy-adapter.js";
 import type { GitHubUserTokenClient } from "../services/github/user-token-client.js";
-import { planGitHubRest } from "../services/github-proxy/api-policy.js";
+import { githubReadRepresentation, planGitHubRest } from "../services/github-proxy/api-policy.js";
 import { GitHubProxyApiTransport, jsonBody } from "../services/github-proxy/api-transport.js";
 import {
   assertPullRequestRefs,
@@ -582,6 +582,22 @@ describe("production GitHub provider adapter REST scope gates", () => {
   });
 
   it.each([
+    "/commits/main/check-runs",
+    "/commits/main/check-suites",
+    "/actions/runs",
+    "/commits/main/status",
+    "/commits/main/statuses",
+    "/statuses/main",
+  ])("denies code authority to a Tree-only REST read of %s without minting", async (suffix) => {
+    const built = adapterFor({ scopes: [treeScope({ access: "read" })] });
+    await expect(built.handle(request(`/repos/owner/repository${suffix}`), authorization)).rejects.toMatchObject({
+      code: "scope_denied",
+    });
+    expect(mint).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["a read-only Tree scope", [treeScope({ access: "read" })]],
     ["a direct-publish Tree scope", [treeScope({ access: "write", publish: "direct" })]],
     ["a code scope with no write", [{ agentId: "agent", role: "code", access: "read" }]],
@@ -606,6 +622,31 @@ describe("production GitHub provider adapter REST scope gates", () => {
     expect(mint).toHaveBeenCalledWith(
       expect.objectContaining({ permissions: { contents: "read", pull_requests: "read", actions: "read" } }),
     );
+  });
+
+  it.each(["/commits/main/status", "/commits/feature/topic/statuses", "/statuses/feature/topic"])(
+    "requests only read-only commit-status authority for %s",
+    async (suffix) => {
+      expect(planGitHubRest("GET", new URL(`https://api.github.com/repos/owner/repository${suffix}`))).toMatchObject({
+        codeOnly: true,
+        extraPermission: "statuses",
+      });
+      await adapter.handle(request(`/repos/owner/repository${suffix}`), authorization);
+      expect(mint).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          permissions: { contents: "read", pull_requests: "read", statuses: "read" },
+        }),
+      );
+      expect(revoke).toHaveBeenCalledExactlyOnceWith(iat);
+    },
+  );
+
+  it.each(["POST", "PATCH", "DELETE"])("never admits a commit-status %s mutation", async (method) => {
+    await expect(
+      adapter.handle(request("/repos/owner/repository/statuses/main", method, { state: "success" }), authorization),
+    ).rejects.toMatchObject({ code: "scope_denied" });
+    expect(mint).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
   });
 });
 
@@ -868,10 +909,13 @@ describe("production GitHub provider adapter GraphQL reads", () => {
     const original = upstream.getMockImplementation();
     upstream.mockImplementation(async (...args) => {
       if (String(args[0]).endsWith("/graphql")) {
-        if (String((args[1] as RequestInit).body).includes("mutation")) writeCount++;
+        if (String((args[1] as RequestInit).body).includes("mutation")) {
+          writeCount++;
+          return Response.json({ data: { updatePullRequest: { pullRequest: { id: "PR_one", number: 1 } } } });
+        }
         return Response.json({
           data: {
-            repository: {
+            node: {
               id: "R_test",
               pullRequests: {
                 nodes: [{ id: "PR_one", number: 1, headRefName: "topic", baseRefName: "main" }],
@@ -1348,4 +1392,147 @@ it.each(["REST", "GraphQL"] as const)("keeps %s target admission registered for 
   expect(check).toBeDefined();
   allowed = false;
   await expect(check?.(req.signal)).rejects.toMatchObject({ code: "scope_denied" });
+});
+
+it.each(["diff", "patch"] as const)(
+  "preserves native %s output instead of JSON with an execution-scoped lease",
+  async (representation) => {
+    const patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n";
+    let upstreamFinished = false;
+    const original = upstream.getMockImplementation();
+    upstream.mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/pulls/1")) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(revoke).not.toHaveBeenCalled();
+        expect(new Headers(init?.headers).get("accept")).toBe(`application/vnd.github.${representation}`);
+        upstreamFinished = true;
+        return new Response(patch, { headers: { "content-type": "text/plain" } });
+      }
+      return original?.(url, init) as Promise<Response>;
+    });
+    const req = request("/repos/owner/repository/pulls/1");
+    const response = await adapter.handle(
+      { ...req, headers: { ...req.headers, accept: `application/vnd.github.v3.${representation}` } },
+      authorization,
+    );
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of response.body) chunks.push(chunk);
+    expect(Buffer.concat(chunks).toString()).toBe(patch);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(upstreamFinished).toBe(true);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(iat);
+  },
+);
+
+it("preserves raw binary contents byte-for-byte and never returns a scoped token", async () => {
+  const contents = Buffer.from([0xff, 0, 0x80, 0x41]);
+  const transport = new GitHubProxyApiTransport(async (_url, init) => {
+    expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.raw");
+    return new Response(contents);
+  });
+  const result = await transport.request({
+    token: iat,
+    method: "GET",
+    path: "/repos/owner/repository/contents/image.bin",
+    representation: "raw",
+    signal: new AbortController().signal,
+  });
+  expect(result.value).toEqual(contents);
+  const unsafe = new GitHubProxyApiTransport(async () => new Response(`diff --git\n+${iat}\n`));
+  await expect(
+    unsafe.request({
+      token: iat,
+      method: "GET",
+      path: "/repos/owner/repository/pulls/1",
+      representation: "diff",
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow(/unavailable/);
+});
+
+it("answers only public schema probes after the current execution fence without minting", async () => {
+  const req = request("/graphql", "POST", {
+    query: '{WorkflowRun:__type(name:"WorkflowRun"){fields(includeDeprecated:true){name}}}',
+  });
+  expect(await responseJson(await adapter.handle(req, authorization))).toMatchObject({
+    data: { WorkflowRun: { fields: expect.arrayContaining([{ name: "event" }]) } },
+  });
+  expect(authorization.recheck).toHaveBeenCalled();
+  expect(mint).not.toHaveBeenCalled();
+  expect(upstream).not.toHaveBeenCalled();
+  const revoked = {
+    ...authorization,
+    recheck: async () => {
+      throw new Error("Execution revoked");
+    },
+  };
+  await expect(
+    adapter.handle(request("/graphql", "POST", { query: '{__type(name:"PullRequest"){fields{name}}}' }), revoked),
+  ).rejects.toThrow("revoked");
+});
+
+it.each([
+  "/repos/owner/repository/pulls",
+  "/repos/owner/repository/commits/sha/check-runs",
+  "/repos/owner/repository/commits/sha/comments",
+  "/repos/owner/repository/commits/sha/status",
+  "/repos/owner/repository/commits/sha/statuses",
+  "/repos/owner/repository/statuses/sha",
+])("rejects diff media on JSON-only route %s", (path) => {
+  expect(() =>
+    githubReadRepresentation(new URL(path, "https://api.github.com"), "application/vnd.github.diff"),
+  ).toThrow(/scope_denied/);
+});
+
+it.each(["tree", "code", "mixed"])("keeps GraphQL check permissions within the %s grant", async (role) => {
+  const scopes =
+    role === "tree" ? [treeScope({ access: "read" })] : role === "code" ? [codeScope()] : [codeScope(), treeScope()];
+  const built = adapterFor({ scopes });
+  const original = upstream.getMockImplementation();
+  upstream.mockImplementation(async (...args) => {
+    if (String(args[0]).endsWith("/graphql"))
+      return Response.json({
+        data: {
+          repository: { pullRequest: { id: "PR_one", number: 1, statusCheckRollup: { contexts: { nodes: [] } } } },
+        },
+      });
+    return (original as typeof fetch)(...args);
+  });
+  const body = {
+    query:
+      '{repository(owner:"owner",name:"repository"){pullRequest(number:1){id number statusCheckRollup{contexts(first:1){nodes{...on CheckRun{name checkSuite{workflowRun{event}}}}}}}}}',
+  };
+  expect((await built.handle(request("/graphql", "POST", body), authorization)).status).toBe(200);
+  if (role === "tree") expect(requests.some((row) => row.path === "/repos/owner/repository/pulls/1")).toBe(true);
+  expect(mint).toHaveBeenCalledWith(
+    expect.objectContaining({
+      permissions: {
+        contents: "read",
+        pull_requests: "read",
+        ...(role === "tree" ? {} : { checks: "read", actions: "read" }),
+      },
+    }),
+  );
+});
+
+it("passes response check permissions to a code mutation after checking the PR identity", async () => {
+  await adapter.handle(request("/repos/owner/repository/pulls/1"), authorization);
+  mint.mockClear();
+  const original = upstream.getMockImplementation();
+  upstream.mockImplementation(async (...args) => {
+    if (String(args[0]).endsWith("/graphql"))
+      return Response.json({ data: { closePullRequest: { pullRequest: { id: "PR_one" } } } });
+    return (original as typeof fetch)(...args);
+  });
+  const query = `mutation { closePullRequest(input:{pullRequestId:"PR_one"}) { pullRequest {
+    statusCheckRollup { contexts(first:1) { nodes { ... on CheckRun {
+      isRequired(pullRequestId:"PR_one") checkSuite { workflowRun { event } }
+    } } } }
+  } } }`;
+  expect((await adapter.handle(request("/graphql", "POST", { query }), authorization)).status).toBe(200);
+  expect(mint).toHaveBeenCalledWith(
+    expect.objectContaining({
+      permissions: { contents: "read", pull_requests: "write", checks: "read", actions: "read" },
+    }),
+  );
 });
