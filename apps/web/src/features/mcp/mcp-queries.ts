@@ -16,7 +16,7 @@ import { LIVE_REFETCH_INTERVAL_MS, liveResourceQueryOptions } from "../../query/
  *
  * The per-Agent read polls on the ordinary live cadence because an authorization completes out of
  * band: the browser leaves for the authorization server and comes back, and the probe result lands
- * afterwards. Polling the row is what makes the tool count appear without a reload — which is why
+ * afterwards. Polling the row updates authorization and tool-loading feedback without a reload, so
  * `probeState` is persisted on the row rather than inferred from a read timestamp.
  */
 
@@ -119,7 +119,7 @@ export function useAvailableMcpServers(agentId: string, enabled: boolean) {
  * definition edit also invalidates every other Agent that uses it, which the pool invalidation and
  * the live cadence between them cover.
  */
-function useMcpInvalidation(agentId?: string) {
+export function useMcpInvalidation(agentId?: string) {
   const queryClient = useQueryClient();
   return async () => {
     await Promise.all([
@@ -205,20 +205,6 @@ export function useSetMcpAuthorization(agentId: string) {
   return useMutation({
     mutationFn: (input: { mcpServerId: string } & Parameters<typeof browserApi.setMcpAuthorization>[2]) =>
       browserApi.setMcpAuthorization(agentId, input.mcpServerId, bodyOf(input)),
-    onSuccess: async (entry) => {
-      queryClient.setQueryData<ListAgentMCPServersResponse>(queryKeys.mcp.agentServers(agentId), (previous) =>
-        mergeAgentServer(previous, entry),
-      );
-      await invalidate();
-    },
-  });
-}
-
-export function useRevokeMcpAuthorization(agentId: string) {
-  const invalidate = useMcpInvalidation(agentId);
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (mcpServerId: string) => browserApi.revokeMcpAuthorization(agentId, mcpServerId),
     onSuccess: async (entry) => {
       queryClient.setQueryData<ListAgentMCPServersResponse>(queryKeys.mcp.agentServers(agentId), (previous) =>
         mergeAgentServer(previous, entry),

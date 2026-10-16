@@ -19,6 +19,7 @@ import {
   AGENT_MCP_SERVER_TEMPLATE,
   AGENT_MCP_SERVERS_TEMPLATE,
   AttachMCPServerRequestSchema,
+  CancelMCPOAuthRequestSchema,
   CreateMCPServerRequestSchema,
   ListAgentMCPServersResponseSchema,
   ListAvailableMCPServersResponseSchema,
@@ -173,8 +174,16 @@ export function registerMcpServerRoutes(
   app.delete(AGENT_MCP_AUTHORIZATION_TEMPLATE, { preHandler }, async (request, reply) => {
     const { agentId, mcpServerId } = parseRequest(AgentServerParamsSchema, request.params);
     const userId = authenticatedUserId(request);
-    await authorization.revoke(userId, agentId, mcpServerId);
-    return reply.code(200).send(await servers.readAgentServer(userId, agentId, mcpServerId));
+    const cancellation =
+      request.body === undefined ? undefined : parseRequest(CancelMCPOAuthRequestSchema, request.body);
+    if (cancellation) await authorization.revoke(userId, agentId, mcpServerId, cancellation.expectedOAuthState);
+    else await authorization.revoke(userId, agentId, mcpServerId);
+    const current = await servers.readAgentServer(userId, agentId, mcpServerId);
+    if (cancellation && current.authorization?.status === "active" && current.authorization.hasCredential)
+      void authorization.probe(userId, agentId, mcpServerId).catch(() => {
+        request.log.warn({ agentId, mcpServerId }, "MCP tools could not be refreshed after cancelling reauthorization");
+      });
+    return reply.code(200).send(current);
   });
 
   app.post(AGENT_MCP_AUTHORIZATION_OAUTH_TEMPLATE, { preHandler }, async (request, reply) => {

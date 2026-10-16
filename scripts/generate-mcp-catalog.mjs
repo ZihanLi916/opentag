@@ -223,7 +223,7 @@ function validateOutboundUrl(value, at, violations) {
 
 /** Auth rules that relate two fields of a schema-valid entry. */
 function validateAuth(row, at, violations) {
-  const { methods, default_kind: defaultKind, oauth } = row.auth;
+  const { methods, default_kind: defaultKind, oauth, bearer } = row.auth;
   if (!methods.includes(defaultKind)) {
     violations.push(`${at}.auth.default_kind: "${defaultKind}" is not listed in auth.methods`);
   }
@@ -233,6 +233,23 @@ function validateAuth(row, at, violations) {
   if (!methods.includes("oauth") && oauth !== undefined) {
     violations.push(`${at}.auth.oauth: is only allowed when auth.methods lists "oauth"`);
   }
+  if (bearer !== undefined) {
+    if (!methods.includes("bearer")) {
+      violations.push(`${at}.auth.bearer: is only allowed when auth.methods lists "bearer"`);
+    }
+    validateOutboundUrl(bearer.url, `${at}.auth.bearer.url`, violations);
+    validateCreatePayload(
+      { name: row.id.slice("mcp/".length), defaultAuthKind: "bearer", ...keyAuthFrom(bearer) },
+      `${at}.auth.bearer`,
+      violations,
+    );
+  }
+}
+
+/** A catalog key alternative uses the same URL and header contract as a custom connection. */
+function keyAuthFrom(bearer) {
+  if (!bearer) return undefined;
+  return { url: bearer.url, authHeader: bearer.auth_header, authScheme: bearer.auth_scheme };
 }
 
 /** `risk.side_effects` may not understate the strongest tool, and tool names are unique. */
@@ -397,6 +414,7 @@ function catalogEntryFrom(row, remote, headers) {
     installable: remote !== undefined,
     ...(remote === undefined ? {} : { url: remote.url, defaultAuthKind: row.auth.default_kind, ...headers }),
     oauthScopes: remote === undefined ? undefined : row.auth.oauth?.scopes,
+    keyAuth: remote === undefined ? undefined : keyAuthFrom(row.auth.bearer),
     remotes: row.remotes?.map((entry) => ({ type: entry.type, url: entry.url })),
     packages: packagesFrom(row.packages),
     prerequisites: row.prerequisites,
@@ -641,6 +659,7 @@ function emitModule(categories, entries, locales, icons, entrySchema) {
     "  authScheme?: string;",
     "  extraHeaders?: Record<string, string>;",
     "  oauthScopes?: string[];",
+    "  keyAuth?: { url: string; authHeader?: string; authScheme?: string };",
     "  category: string;",
     "  website: string;",
     "  iconUrl: string;",

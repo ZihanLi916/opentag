@@ -84,6 +84,28 @@
           "description": "A prefill for a new authorization, never a claim about what the Server requires.",
           "enum": ["none", "bearer", "oauth"]
         },
+        "bearer": {
+          "description": "Optional key connection settings when bearer is a supported method. Contains no credential.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "auth_header": {
+              "type": "string",
+              "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+              "maxLength": 128
+            },
+            "auth_scheme": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
         "oauth": {
           "type": "object",
           "additionalProperties": false,

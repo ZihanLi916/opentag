@@ -480,6 +480,36 @@ describe("MCP per-Agent authorization", () => {
     expect(authorization.revoke).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER);
   });
 
+  it("conditionally cancels only the named OAuth attempt", async () => {
+    const { app, authorization } = build();
+    const { status } = await send(app, "DELETE", AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH, {
+      payload: { expectedOAuthState: "issued-state" },
+    });
+    expect(status).toBe(200);
+    expect(authorization.revoke).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER, "issued-state");
+  });
+  it("refreshes tools when cancellation preserves a working credential", async () => {
+    const { app, authorization, servers } = build();
+    servers.readAgentServer.mockResolvedValue({
+      ...AGENT_SERVER_DTO,
+      authorization: { kind: "oauth", status: "active", hasCredential: true },
+    });
+    const { body, status } = await send(app, "DELETE", AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH, {
+      payload: { expectedOAuthState: "issued-state" },
+    });
+    expect(status).toBe(200);
+    expect(body.authorization).toMatchObject({ status: "active", hasCredential: true });
+    expect(authorization.probe).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER);
+  });
+  it("rejects an invalid cancellation body before changing authorization", async () => {
+    const { app, authorization } = build();
+    const { status } = await send(app, "DELETE", AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH, {
+      payload: { expectedOAuthState: "", credential: "unused" },
+    });
+    expect(status).toBe(400);
+    expect(authorization.revoke).not.toHaveBeenCalled();
+  });
+
   it("refuses an authorization request that pairs a kind with the wrong key field", async () => {
     const { app, authorization } = build();
     for (const payload of [

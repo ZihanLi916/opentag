@@ -138,6 +138,7 @@ export type McpCatalogEntry = {
   authScheme?: string;
   extraHeaders?: Record<string, string>;
   oauthScopes?: string[];
+  keyAuth?: { url: string; authHeader?: string; authScheme?: string };
   category: string;
   website: string;
   iconUrl: string;
@@ -263,6 +264,28 @@ export const MCP_CATALOG_ENTRY_SCHEMA = {
         default_kind: {
           description: "A prefill for a new authorization, never a claim about what the Server requires.",
           enum: ["none", "bearer", "oauth"],
+        },
+        bearer: {
+          description: "Optional key connection settings when bearer is a supported method. Contains no credential.",
+          type: "object",
+          additionalProperties: false,
+          required: ["url"],
+          properties: {
+            url: {
+              type: "string",
+              format: "uri",
+              pattern: "^https://",
+            },
+            auth_header: {
+              type: "string",
+              pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+              maxLength: 128,
+            },
+            auth_scheme: {
+              type: "string",
+              maxLength: 64,
+            },
+          },
         },
         oauth: {
           type: "object",
@@ -1128,6 +1151,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.linear.app/mcp",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.linear.app/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1142,7 +1170,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["search-issues", "create-issues", "update-issues"],
     keywords: ["issues", "tickets", "tasks"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1214,6 +1242,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.monday.com/mcp",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.monday.com/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1228,7 +1261,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["read-boards", "update-items"],
     keywords: ["boards", "items", "work management"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1257,6 +1290,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.atlassian.com/v2/mcp?tools=all",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.atlassian.com/v2/mcp?tools=all",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1271,7 +1309,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["search-issues", "update-issues", "read-pages", "edit-pages"],
     keywords: ["jira", "confluence", "tickets"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1298,12 +1336,17 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
       zh: "当任务需要最新的网页资料或调研素材时使用。",
     },
     installable: true,
-    url: "https://mcp.exa.ai/mcp",
-    defaultAuthKind: "none",
+    url: "https://mcp.exa.ai/mcp?login",
+    defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.exa.ai/mcp",
+      authHeader: "x-api-key",
+      authScheme: "",
+    },
     remotes: [
       {
         type: "streamable-http",
-        url: "https://mcp.exa.ai/mcp",
+        url: "https://mcp.exa.ai/mcp?login",
       },
     ],
     category: "search",
@@ -1314,8 +1357,9 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["web-search"],
     keywords: ["search", "web", "research"],
     auth: {
-      methods: ["none"],
-      defaultKind: "none",
+      methods: ["oauth", "bearer"],
+      defaultKind: "oauth",
+      oauth: {},
     },
     risk: {
       sideEffects: "none",
@@ -1341,7 +1385,12 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     },
     installable: true,
     url: "https://mcp.tavily.com/mcp",
-    defaultAuthKind: "none",
+    defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.tavily.com/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1356,8 +1405,9 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["web-search", "extract-content"],
     keywords: ["search", "web", "crawl"],
     auth: {
-      methods: ["none"],
-      defaultKind: "none",
+      methods: ["oauth", "bearer"],
+      defaultKind: "oauth",
+      oauth: {},
     },
     risk: {
       sideEffects: "none",
@@ -1382,12 +1432,17 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
       zh: "当任务需要以清晰可读的形式获取网页内容时使用。",
     },
     installable: true,
-    url: "https://mcp.firecrawl.dev/v2/mcp",
-    defaultAuthKind: "none",
+    url: "https://mcp.firecrawl.dev/v2/mcp-oauth",
+    defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.firecrawl.dev/v2/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
-        url: "https://mcp.firecrawl.dev/v2/mcp",
+        url: "https://mcp.firecrawl.dev/v2/mcp-oauth",
       },
     ],
     category: "search",
@@ -1398,8 +1453,9 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["extract-content", "crawl-pages"],
     keywords: ["scrape", "crawl", "web"],
     auth: {
-      methods: ["none"],
-      defaultKind: "none",
+      methods: ["oauth", "bearer"],
+      defaultKind: "oauth",
+      oauth: {},
     },
     risk: {
       sideEffects: "none",
@@ -1568,6 +1624,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.airtable.com/mcp",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.airtable.com/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1582,7 +1643,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["search-records", "update-records"],
     keywords: ["database", "tables", "records"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1697,6 +1758,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.supabase.com/mcp",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.supabase.com/mcp",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1711,7 +1777,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["query-databases", "inspect-logs", "manage-projects"],
     keywords: ["postgres", "database", "backend"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1825,6 +1891,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.stripe.com",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.stripe.com",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1839,7 +1910,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["lookup-payments", "lookup-subscriptions", "manage-customers"],
     keywords: ["payments", "billing", "subscriptions"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },
@@ -1868,6 +1939,11 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     installable: true,
     url: "https://mcp.zapier.com/api/v1/connect",
     defaultAuthKind: "oauth",
+    keyAuth: {
+      url: "https://mcp.zapier.com/api/v1/connect",
+      authHeader: "authorization",
+      authScheme: "Bearer",
+    },
     remotes: [
       {
         type: "streamable-http",
@@ -1882,7 +1958,7 @@ export const MCP_CATALOG_ENTRIES: readonly McpCatalogEntry[] = [
     capabilities: ["run-actions", "connect-apps"],
     keywords: ["automation", "workflow", "integrations"],
     auth: {
-      methods: ["oauth"],
+      methods: ["oauth", "bearer"],
       defaultKind: "oauth",
       oauth: {},
     },

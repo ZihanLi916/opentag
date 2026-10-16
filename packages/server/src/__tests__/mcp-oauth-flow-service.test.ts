@@ -17,9 +17,11 @@ import {
 import { hashSecret } from "../services/auth/security.js";
 import { ApplicationCipher } from "../services/crypto.js";
 import { MCP_ERROR_CODES } from "../services/mcp/errors.js";
+import { McpAuthorizationService } from "../services/mcp/mcp-authorization-service.js";
 import { McpCredentialCipher } from "../services/mcp/mcp-credential-cipher.js";
 import { MCP_OAUTH_STATE_TTL_MS, McpOAuthClient } from "../services/mcp/mcp-oauth.js";
 import { McpOAuthFlowService, orderIssuers } from "../services/mcp/mcp-oauth-flow-service.js";
+import type { McpProbe } from "../services/mcp/mcp-probe.js";
 import { McpServerService } from "../services/mcp/mcp-server-service.js";
 import { McpOutboundFetcher } from "../services/mcp/mcp-url-policy.js";
 import { createUnitDatabase, type UnitDatabase } from "./support/unit-database.js";
@@ -1878,5 +1880,99 @@ describe("McpOAuthFlowService.refreshAuthorization", () => {
     });
     // The credential stays for a later reauthorization; only the verdict is recorded.
     expect(after?.ciphertext).not.toBeNull();
+  });
+});
+
+describe("OAuth concurrent write protection", () => {
+  it("does not let a delayed exchange failure erase a newer flow", async () => {
+    const ids = await seed();
+    let secondState = "";
+    const { flows } = build({
+      ...discoverableAs(),
+      [TOKEN_URL]: async () => {
+        const newer = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+        secondState = stateOf(newer.authorizationUrl);
+        return doc({ error: "invalid_grant" }, 400);
+      },
+    });
+    const first = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+    await expect(
+      flows.callback({ code: "old-code", state: stateOf(first.authorizationUrl) }, FLOW_SECRET),
+    ).rejects.toBeDefined();
+    expect(await readAuthorization(ids)).toMatchObject({
+      state: hashSecret(secondState),
+      status: "pending",
+      failureCode: null,
+    });
+  });
+
+  it("invalidates an old refresh claim when a callback commits a new credential", async () => {
+    const ids = await seed();
+    const claim = randomUUID();
+    const { flows } = build({
+      ...discoverableAs(),
+      [TOKEN_URL]: async () => {
+        await unit.database
+          .update(mcpServerAuthorizations)
+          .set({ refreshClaimId: claim, refreshClaimedAt: new Date() })
+          .where(eq(mcpServerAuthorizations.agentId, ids.agentId));
+        return doc({ access_token: "new-token", expires_in: 3600 });
+      },
+    });
+    const started = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+    await flows.callback({ code: "new-code", state: stateOf(started.authorizationUrl) }, FLOW_SECRET);
+    expect(await readAuthorization(ids)).toMatchObject({
+      status: "active",
+      refreshClaimId: null,
+      refreshClaimedAt: null,
+      refreshGeneration: 1,
+    });
+  });
+});
+
+describe("cancelling reauthorization", () => {
+  it("preserves the working credential after starting and cancelling a replacement flow", async () => {
+    const ids = await seed();
+    const { flows, cipher, servers } = build({
+      ...discoverableAs(),
+      [TOKEN_URL]: doc({
+        access_token: "old-token",
+        refresh_token: "old-refresh",
+        token_type: "Bearer",
+        expires_in: 3600,
+      }),
+    });
+    const initial = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+    await flows.callback({ code: "initial-code", state: stateOf(initial.authorizationUrl) }, FLOW_SECRET);
+    const before = await readAuthorization(ids);
+    const replacement = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+    const authorization = new McpAuthorizationService({
+      database: unit.database,
+      cipher,
+      servers,
+      probe: { probe: vi.fn() } as unknown as McpProbe,
+    });
+    await authorization.revoke(ids.accountId, ids.agentId, ids.mcpServerId, stateOf(replacement.authorizationUrl));
+    const after = await readAuthorization(ids);
+    expect(after).toMatchObject({
+      status: "active",
+      ciphertext: before?.ciphertext,
+      keyId: before?.keyId,
+      authorizationServer: before?.authorizationServer,
+      oauthResource: before?.oauthResource,
+      tools: before?.tools,
+      state: null,
+      stateExpiresAt: null,
+      pkceCiphertext: null,
+      loginSessionHash: null,
+      flowOauthResource: null,
+    });
+    expect(
+      (await authorization.resolveActiveCredential(ids.accountId, ids.agentId, ids.mcpServerId))?.credential,
+    ).toMatchObject({ accessToken: "old-token", refreshToken: "old-refresh" });
+    await expect(
+      flows.callback({ code: "late-code", state: stateOf(replacement.authorizationUrl) }, FLOW_SECRET),
+    ).rejects.toMatchObject({ code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID });
+    expect((await readAuthorization(ids))?.ciphertext).toBe(before?.ciphertext);
   });
 });

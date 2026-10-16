@@ -26,6 +26,8 @@
 #   auth.oauth.scopes  optional; the OAuth scopes the provider's consent screen is configured for,
 #                      requested when a card starts OAuth. At most 64 scopes of at most 255 characters
 #                      each.
+#   auth.bearer        optional key endpoint, auth_header, and auth_scheme (an empty prefix is valid).
+#                      Requires bearer in auth.methods; contains no credential.
 #   risk               side_effects (none | write | destructive) may not be weaker than any listed tool;
 #                      data_access is public or private
 #   remotes            hosted endpoints. The first streamable-http remote is the installable endpoint;
@@ -88,14 +90,19 @@
   capabilities: ["web-search"]
   status: active
   auth:
-    methods: [none]
-    default_kind: none
+    methods: [oauth, bearer]
+    default_kind: oauth
+    oauth: {}
+    bearer:
+      url: https://mcp.exa.ai/mcp
+      auth_header: x-api-key
+      auth_scheme: ""
   risk:
     side_effects: none
     data_access: public
   remotes:
     - type: streamable-http
-      url: https://mcp.exa.ai/mcp
+      url: https://mcp.exa.ai/mcp?login
   catalog:
     category: search
     order: 10
@@ -119,9 +126,13 @@
   capabilities: ["search-issues", "create-issues", "update-issues"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.linear.app/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: write
     data_access: private
@@ -183,9 +194,13 @@
   capabilities: ["search-issues", "update-issues", "read-pages", "edit-pages"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.atlassian.com/v2/mcp?tools=all
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: write
     data_access: private
@@ -569,9 +584,13 @@
   capabilities: ["read-boards", "update-items"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.monday.com/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: write
     data_access: private
@@ -697,8 +716,13 @@
   capabilities: ["web-search", "extract-content"]
   status: active
   auth:
-    methods: [none]
-    default_kind: none
+    methods: [oauth, bearer]
+    default_kind: oauth
+    oauth: {}
+    bearer:
+      url: https://mcp.tavily.com/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: none
     data_access: public
@@ -728,14 +752,19 @@
   capabilities: ["extract-content", "crawl-pages"]
   status: active
   auth:
-    methods: [none]
-    default_kind: none
+    methods: [oauth, bearer]
+    default_kind: oauth
+    oauth: {}
+    bearer:
+      url: https://mcp.firecrawl.dev/v2/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: none
     data_access: public
   remotes:
     - type: streamable-http
-      url: https://mcp.firecrawl.dev/v2/mcp
+      url: https://mcp.firecrawl.dev/v2/mcp-oauth
   catalog:
     category: search
     order: 30
@@ -759,9 +788,13 @@
   capabilities: ["run-actions", "connect-apps"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.zapier.com/api/v1/connect
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: destructive
     data_access: private
@@ -798,9 +831,13 @@
   capabilities: ["search-records", "update-records"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.airtable.com/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: write
     data_access: private
@@ -830,9 +867,13 @@
   capabilities: ["query-databases", "inspect-logs", "manage-projects"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.supabase.com/mcp
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: destructive
     data_access: private
@@ -894,9 +935,13 @@
   capabilities: ["lookup-payments", "lookup-subscriptions", "manage-customers"]
   status: active
   auth:
-    methods: [oauth]
+    methods: [oauth, bearer]
     default_kind: oauth
     oauth: {}
+    bearer:
+      url: https://mcp.stripe.com
+      auth_header: authorization
+      auth_scheme: Bearer
   risk:
     side_effects: write
     data_access: private

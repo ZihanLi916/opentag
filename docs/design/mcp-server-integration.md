@@ -926,6 +926,13 @@ GET    /api/v1/mcp-servers/oauth/callback                unauthenticated; the st
 GET    /oauth/client-metadata.json                       unauthenticated; this deployment's CIMD document
 ```
 
+The authorization DELETE accepts an optional `{ expectedOAuthState }` body to cancel one OAuth
+attempt. A matching flow with an existing credential keeps that credential, its status, audience,
+and snapshot; only the flow fields are cleared. Without a credential, cancellation revokes the
+provisional authorization. A mismatched or completed attempt returns `MCP_OAUTH_FLOW_INVALID`.
+The request without a body remains an explicit credential revocation. Cancelling a replacement flow
+with an active credential also schedules a tool probe, so the UI does not wait for the background scan.
+
 `GET /api/v1/mcp-servers` returns, per row: `boundAgentCount`, `authorizedAgentCount`,
 `lastProbedAt`, `defaultAuthKind`, `authHeader`, `authScheme`. Both counts exclude deleted Agents.
 `authorizedAgentCount` counts only `status='active'` rows, because the number answers "how many
@@ -1250,6 +1257,12 @@ declares none leaves scope selection to the flow's own discovery rules. The Add 
 scopes only for an exact endpoint match. Google's entries
 carry Google's recommended per-product subsets, which deliberately exclude restricted scopes such as
 `https://mail.google.com/`.
+
+An entry may also configure `auth.bearer` with `url`, `auth_header`, and `auth_scheme` when
+`auth.methods` includes `bearer`. The generator validates these settings against the shared create
+and outbound URL contracts and emits the flat `keyAuth` field for the Details authentication switch.
+An empty scheme sends the key without a prefix. The catalog contains connection settings only;
+users enter their credentials in Details.
 
 A provider may be listed only when credentials-free discovery of its published endpoint succeeds
 under the identity rules above. Three entries exist because of that path: **Atlassian**,

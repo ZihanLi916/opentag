@@ -492,3 +492,37 @@ test("keeps unverified assets unmarked and rejects invalid official-mark metadat
     entries: [nested("catalog", { icon_is_official: "yes" })],
   });
 });
+
+test("emits an alternate key endpoint with an empty prefix", (t) => {
+  const fixture = fixtureDirectory(t, {
+    entries: [
+      nested("auth", {
+        methods: ["oauth", "bearer"],
+        bearer: { url: "https://api.example.com/mcp", auth_header: "x-api-key", auth_scheme: "" },
+      }),
+    ],
+  });
+  const result = runGenerator(fixture.root);
+  assert.equal(result.status, 0, result.stderr);
+  const generated = readFileSync(fixture.target, "utf8");
+  assert.match(
+    generated,
+    /keyAuth: \{\s+url: "https:\/\/api.example.com\/mcp",\s+authHeader: "x-api-key",\s+authScheme: "",/,
+  );
+});
+for (const bearer of [
+  { url: "http://127.0.0.1/mcp" },
+  { url: "https://api.example.com/mcp", auth_header: "Host" },
+  { url: "https://api.example.com/mcp", defaultAuthKind: "none" },
+  { url: "https://api.example.com/mcp", bearerKey: "secret" },
+]) {
+  test(`rejects invalid alternate key settings ${JSON.stringify(bearer)}`, (t) => {
+    assertRejected(t, /auth\.bearer/, { entries: [nested("auth", { methods: ["oauth", "bearer"], bearer })] });
+  });
+}
+
+test("rejects a key connection when bearer is not a supported method", (t) => {
+  assertRejected(t, /auth\.bearer/, {
+    entries: [nested("auth", { bearer: { url: "https://api.example.com/mcp" } })],
+  });
+});
