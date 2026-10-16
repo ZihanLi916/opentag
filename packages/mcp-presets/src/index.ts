@@ -28,3 +28,4 @@ export {
   type McpCatalogTool,
   type McpInstallableCatalogEntry,
 } from "./mcp-catalog.gen.js";
+export { type McpCatalogViolation, validateMcpCatalog, validateMcpCatalogEntry } from "./validate.js";
