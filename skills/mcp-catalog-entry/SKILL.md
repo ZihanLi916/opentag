@@ -61,6 +61,19 @@ curl -sS -i -X POST <endpoint> \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"catalog-verify","version":"1.0.0"}}}'
 ```
 
+### Shortcut: scaffold from the endpoint
+
+`pnpm catalog:add --url <endpoint>` runs a credential-free probe for you: `server/discover` first (the modern, stateless era), and the
+`initialize` handshake above only when a 400/404/405 body is not a modern JSON-RPC error. It then reads
+`serverInfo` and `tools/list`, classifies the authorization method from the `401` challenge, and prints
+a ready-to-edit registry-style YAML entry with the evidence as comments. The tool inventory comes from
+`tools/list`, each tool's `side_effect` from its `readOnlyHint` / `destructiveHint` annotations (a tool
+with neither counts as `write`), and `risk.side_effects` is the strongest of them. It is a dry run by
+default; `--write` appends the entry to `mcp-catalog.yaml`, and `--icon-file <path>` copies the icon only together with `--write`. `--category` is required. `tools/list` is paged to exhaustion; if any page fails the inventory is dropped, risk falls back to `destructive`, and `--write` refuses to persist the entry. A `401` without a Bearer challenge proves no method, so the command then requires `--auth`. The command refuses hosts that resolve to a non-public address, with no bypass flag.
+Every guessed field is listed under "Review before committing": the copy, `when_to_use`, the homepage,
+`icon_is_official`, and the icon still need a human. The scaffold supplies facts, not decisions: still
+confirm them against the provider's documentation.
+
 ## Step 2 — Choose the entry identity
 
 - `id` — `mcp/<slug>`: the slug is lowercase letters, then letters, digits, and hyphens. It must be
