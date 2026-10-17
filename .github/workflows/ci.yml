@@ -829,6 +829,13 @@ jobs:
               head_sha="$PR_HEAD_SHA"
               ;;
             push) base_sha="$PUSH_BEFORE" ;;
+            workflow_dispatch)
+              # Scan the entire hotfix against the already released production baseline.
+              if [ "$GITHUB_REF" = refs/heads/fix/prod-im-delivery-hotfix-20261017 ]; then
+                base_sha=47e7c7b2519f7a7253bf9614951475e3de26edd2
+                git merge-base --is-ancestor "$base_sha" "$head_sha"
+              fi
+              ;;
           esac
           # A branch's first push and a force push both leave a base that is not reachable
           # here; scanning the full history of the head is the safe reading of that range.
