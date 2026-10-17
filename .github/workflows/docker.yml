@@ -7,6 +7,7 @@ on:
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,7 +31,8 @@ jobs:
     # would put two writers on one supposedly immutable coordinate whenever a tag is pushed while
     # the branch build for the same commit is still running: both would find it absent, and both
     # would publish a differently attested digest under it.
-    if: github.repository == 'first-tree-ai/opentag' && github.event_name == 'push' && github.ref_type == 'branch'
+    # This release branch permits an explicit Server-only hotfix build at its exact source SHA.
+    if: github.repository == 'first-tree-ai/opentag' && ((github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/prod-im-delivery-hotfix-20261017'))
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.commit.outputs.present == 'true' && steps.commit.outputs.digest || steps.build.outputs.digest }}
