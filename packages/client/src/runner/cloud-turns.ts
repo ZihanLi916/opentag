@@ -20,6 +20,7 @@ import {
   type RunnerCloudSessionMessageVerifiedFrame,
   RuntimeUsageSchema,
   redactForLog,
+  redactSensitive,
   type SessionCliProofGrant,
   type SessionMessageDeliveryRequestV3,
   serializeRunnerCloudSessionWorkerStdin,
@@ -1604,7 +1605,7 @@ export class CloudTurnRunner {
   }
 
   #logWorkerExit(code: number, stderr: string, bindings: Readonly<Record<string, string>>, durationMs: number): void {
-    const lines = stderr.trim().split("\n").filter(Boolean).slice(-64);
+    const lines = redactSensitive(stderr).trim().split("\n").filter(Boolean).slice(-64);
     const records: string[] = [];
     let remaining = 64 * 1024;
     for (const line of lines.reverse()) {

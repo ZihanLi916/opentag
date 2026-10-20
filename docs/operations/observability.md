@@ -58,7 +58,9 @@ Cloud workers emit bounded structured diagnostics to stderr independently of the
 protocol. They default to `info`; an explicit `OPENTAG_LOG_LEVEL` still takes precedence. The parent
 Runner relays at most 64 trailing nonempty stderr lines within a 64 KiB total record budget, adds
 Session/Delivery (or message)/Turn correlation and the worker exit code, and emits a worker-exit
-summary. A diagnostic sink failure cannot change settlement.
+summary. Redaction precedes line splitting and tail selection so folded credential headers stay
+masked even when their header line falls outside the retained tail. A diagnostic sink failure
+cannot change settlement.
 
 Pi logs `pi_spawn`, `pi_rpc_request`, `pi_rpc_write`, `pi_rpc_response`, and `pi_exit`. RPC records
 contain the command and request ID, elapsed milliseconds from request submission, and the configured

@@ -989,7 +989,8 @@ describe("CloudTurnRunner", () => {
   it("forwards bounded redacted worker stderr with correlation without changing settlement", async () => {
     const logs: string[] = [];
     const stderr =
-      `${"x".repeat(3000)}\n`.repeat(100) + "Error: Pi get_state failed\nAuthorization: Bearer private-credential\n";
+      `${"x".repeat(3000)}\n`.repeat(100) +
+      "Error: Pi get_state failed\nAuthorization: Bearer private-credential\n  folded-private-credential\nCookie: session=private-cookie\n";
     const h = harness({
       worker: async () => ({ ...completedExec(), stderr }),
       runnerOptions: { log: (line) => logs.push(line) },
@@ -1012,6 +1013,8 @@ describe("CloudTurnRunner", () => {
     );
     expect(logs.join("\n")).toContain("Pi get_state failed");
     expect(logs.join("\n")).not.toContain("private-credential");
+    expect(logs.join("\n")).not.toContain("folded-private-credential");
+    expect(logs.join("\n")).not.toContain("private-cookie");
     expect(Buffer.byteLength(logs.join(""))).toBeLessThan(66 * 1024);
     await h.runner.close();
   });
