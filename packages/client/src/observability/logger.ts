@@ -19,6 +19,7 @@ export interface ClientLogger {
 
 export interface CreateLoggerOptions {
   destination?: "configured" | "stderr" | "file" | "dual";
+  defaultLevel?: "info" | "warn";
 }
 
 /**
@@ -88,7 +89,8 @@ export function configureClientLoggerContext(bindings: ClientLogBindings): void 
 }
 
 export function createLogger(module: string, options: CreateLoggerOptions = {}): ClientLogger {
-  if (options.destination === "stderr") return adapt(fixed(buildRoot(stderrDestination(), false)), { module });
+  if (options.destination === "stderr")
+    return adapt(fixed(buildRoot(stderrDestination(), false, options.defaultLevel)), { module });
   if (options.destination === "file") return adapt(fixed(buildRoot(fileDestination(), true)), { module });
   if (options.destination === "dual") return adapt(fixed(buildRoot(dualDestination(), true)), { module });
   return adapt(root, { module });
@@ -110,13 +112,17 @@ function root(): PinoLogger {
   return rootLogger;
 }
 
-function buildRoot(destination: DestinationStream, serviceMode: boolean): PinoLogger {
+function buildRoot(destination: DestinationStream, serviceMode: boolean, defaultLevel?: "info" | "warn"): PinoLogger {
   const environment = serviceEnvironment ?? process.env;
   const configured = environment.OPENTAG_LOG_LEVEL;
   const validConfigured = configured && LOG_LEVELS.has(configured) ? configured : undefined;
   const level =
     validConfigured ??
-    (configured ? "info" : process.env.NODE_ENV === "test" ? "silent" : serviceMode ? "info" : "warn");
+    (configured
+      ? "info"
+      : process.env.NODE_ENV === "test"
+        ? "silent"
+        : (defaultLevel ?? (serviceMode ? "info" : "warn")));
   const logger = pino(
     {
       base: Object.keys(clientLoggerContext).length > 0 ? clientLoggerContext : null,

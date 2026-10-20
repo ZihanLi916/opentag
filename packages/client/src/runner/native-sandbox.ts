@@ -49,7 +49,11 @@ const CAPTURE_LIMIT_BYTES = 256 * 1024;
 export class NativeSandboxError extends Error {
   readonly code: "unavailable" | "requires_root" | "launch_failed" | "exec_failed" | "delete_failed" | "probe_failed";
 
-  constructor(code: NativeSandboxError["code"], message: string) {
+  constructor(
+    code: NativeSandboxError["code"],
+    message: string,
+    readonly diagnostics?: { readonly code: number; readonly stderr: string },
+  ) {
     super(message);
     this.name = "NativeSandboxError";
     this.code = code;
@@ -661,7 +665,13 @@ export class NativeSandbox {
         clearTimeout(timer);
         clearTimeout(escalation);
         options.signal?.removeEventListener("abort", onAbort);
-        if (failure) reject(failure);
+        if (failure)
+          reject(
+            new NativeSandboxError(failure.code, failure.message, {
+              code,
+              stderr: Buffer.concat(stderr).toString("utf8"),
+            }),
+          );
         else
           resolve({
             code,

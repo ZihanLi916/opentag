@@ -3,16 +3,79 @@ import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redactForLog } from "@opentag/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRuntimeBinding, AgentRuntimeEvent, CreateAgentRuntimeRequest } from "../agent-runtime/types.js";
 import { PiAgentRuntime, PiAgentRuntimeFactory, piAgentRuntimeEnvironment } from "../providers/pi/agent-runtime.js";
 import { type PiRpcClient, PiRpcError, type PiRpcRequestOptions } from "../providers/pi/rpc-wire.js";
+import { type RecordedLog, recordingLogger } from "./recording-logger.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const SESSION_FILE = `/sessions/${SESSION_ID}.jsonl`;
 const SESSION_FILE_HASH = createHash("sha256").update(SESSION_FILE).digest("hex");
 
 describe("PiAgentRuntime", () => {
+  it.each(["spawn", "get_state", "restore_session", "prompt_preflight"])(
+    "identifies the failing %s phase",
+    async (phase) => {
+      const logs: RecordedLog[] = [];
+      const client: PiRpcClient = {
+        close: async () => undefined,
+        subscribe: () => () => undefined,
+        request: async (command) => {
+          if (phase === "get_state" || command.type === "prompt") throw new PiRpcError("timeout", "fixture timeout");
+          return {
+            sessionId: phase === "restore_session" ? "22222222-2222-4222-8222-222222222222" : SESSION_ID,
+            sessionFile: SESSION_FILE,
+            messageCount: 0,
+          };
+        },
+      };
+      const factory = new PiAgentRuntimeFactory({
+        logger: recordingLogger(logs),
+        createSessionId: () => SESSION_ID,
+        createClient: () => {
+          if (phase === "spawn") throw new PiRpcError("spawn", "fixture launch failure");
+          return client;
+        },
+      });
+      const runtime = await factory.create(createRequest(() => undefined));
+      const result = await runtime.prompt({ runId: "diagnostic-run", input: input("private input") });
+      expect(result.status).toBe("failed");
+      expect(logs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            level: "warn",
+            fields: expect.objectContaining({
+              operation: "pi_run",
+              phase,
+              runId: "diagnostic-run",
+              providerSessionId: SESSION_ID,
+              durationMs: expect.any(Number),
+              phaseDurationMs: expect.any(Number),
+            }),
+          }),
+        ]),
+      );
+      expect(JSON.stringify(logs)).not.toContain("private input");
+      await runtime.close();
+    },
+  );
+
+  it("runs with the default diagnostic logger when constructed directly", async () => {
+    const client = new ScriptedPiClient("complete");
+    const runtime = new PiAgentRuntime({
+      ...createRequest(() => undefined),
+      binding: unmaterializedBinding(),
+      createClient: () => client,
+      resume: false,
+    });
+    await expect(runtime.prompt({ runId: "default-logger", input: input("hello") })).resolves.toMatchObject({
+      status: "completed",
+    });
+    await runtime.close();
+  });
+
   it("creates a persistent session and translates a complete Pi RPC run", async () => {
     const client = new ScriptedPiClient("complete");
     const events: AgentRuntimeEvent[] = [];
@@ -621,7 +684,13 @@ describe("PiAgentRuntime", () => {
   it("lets preflight compaction outlast the prompt acceptance budget, then runs the prompt", async () => {
     const client = new PreflightPiClient();
     const events: AgentRuntimeEvent[] = [];
-    const runtime = await preflightFactory(client).create(
+    const logs: RecordedLog[] = [];
+    const runtime = await new PiAgentRuntimeFactory({
+      logger: recordingLogger(logs),
+      createSessionId: () => SESSION_ID,
+      createClient: () => client,
+      process: { requestTimeoutMs: PROMPT_ACCEPTANCE_TIMEOUT_MS },
+    }).create(
       createRequest((event) => {
         events.push(event);
       }),
@@ -634,6 +703,13 @@ describe("PiAgentRuntime", () => {
     // Pi 0.84.2 compacts in prompt preflight, before it acknowledges the prompt.
     client.emit({ type: "compaction_start", reason: "threshold" });
     await vi.waitFor(() => expect(providerEventPayloadTypes(events)).toContain("compaction_start"));
+    expect(redactForLog(logs)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fields: expect.objectContaining({ operation: "pi_compaction", awaitingAcceptance: true }),
+        }),
+      ]),
+    );
     await sleep(PROMPT_ACCEPTANCE_TIMEOUT_MS * 4);
     expect(runtime.state).toMatchObject({ phase: "running", activeRunId: "run-preflight-compaction" });
     expect(client.promptPending).toBe(true);

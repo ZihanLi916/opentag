@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { redactForLog } from "@opentag/shared";
 import { type ClientLogger, createLogger } from "../../observability/logger.js";
 import { signalWatchedProcess, spawnWatchedProcess } from "../process-owner.js";
 
@@ -33,6 +34,7 @@ export interface PiRpcSpawnOptions {
   readonly maxStderrBytes?: number;
   readonly requestTimeoutMs?: number;
   readonly logger?: ClientLogger;
+  readonly diagnosticSecrets?: readonly string[];
   readonly spawnProcess?: (
     command: string,
     args: readonly string[],
@@ -75,6 +77,9 @@ export class PiRpcProcess implements PiRpcClient {
   readonly #maxStderrBytes: number;
   readonly #requestTimeoutMs: number;
   readonly #logger: ClientLogger;
+  readonly #startedAt = performance.now();
+  readonly #diagnosticSecrets: string[];
+  #stderrBytes = 0;
   readonly #pending = new Map<string, PendingRequest>();
   readonly #listeners = new Set<(message: Readonly<Record<string, unknown>>) => void>();
   readonly #exit: Promise<void>;
@@ -91,6 +96,7 @@ export class PiRpcProcess implements PiRpcClient {
     this.#maxStderrBytes = options.maxStderrBytes ?? PI_RPC_MAX_STDERR_BYTES;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? PI_RPC_REQUEST_TIMEOUT_MS;
     this.#logger = options.logger ?? createLogger("provider-pi");
+    this.#diagnosticSecrets = diagnosticSecrets(options);
     if (!Number.isSafeInteger(this.#maxLineBytes) || this.#maxLineBytes < 1024) {
       throw new Error("maxLineBytes must be a safe integer of at least 1024");
     }
@@ -103,6 +109,7 @@ export class PiRpcProcess implements PiRpcClient {
     this.#exit = new Promise<void>((resolve) => {
       this.#resolveExit = resolve;
     });
+    this.#logger.info({ operation: "pi_spawn", outcome: "started" }, "Starting Pi RPC process");
     try {
       this.#child = (options.spawnProcess ?? defaultSpawn)(options.command ?? "pi", options.args, {
         cwd: options.cwd,
@@ -110,16 +117,28 @@ export class PiRpcProcess implements PiRpcClient {
         detached: process.platform !== "win32",
       });
     } catch (error) {
-      this.#logger.debug({ code: "spawn_failed", error: String(error) }, "Pi RPC process spawn failed");
-      throw new PiRpcError("spawn", error instanceof Error ? error.message : "Pi could not be started");
+      this.#logger.warn(
+        {
+          operation: "pi_spawn",
+          outcome: "failed",
+          errorCode: "spawn",
+          durationMs: this.#elapsed(),
+          error: this.#sanitize(String(error)),
+        },
+        "Pi RPC process spawn failed",
+      );
+      throw new PiRpcError("spawn", error instanceof Error ? this.#sanitize(error.message) : "Pi could not be started");
     }
+    this.#logger.info(
+      { operation: "pi_spawn", outcome: "created", pid: this.#child.pid, durationMs: this.#elapsed() },
+      "Pi RPC process created",
+    );
     this.#child.stdout.on("data", (chunk: Buffer) => this.#onStdout(chunk));
     this.#child.stderr.on("data", (chunk: Buffer) => this.#onStderr(chunk));
     this.#child.on("error", (error) => {
-      this.#logger.debug({ code: "process_error", error: String(error) }, "Pi RPC process failed");
       this.#onChildError(error);
     });
-    this.#child.on("close", () => this.#onExit());
+    this.#child.on("close", (code, signal) => this.#onExit(code, signal));
   }
 
   get pid(): number | undefined {
@@ -148,8 +167,15 @@ export class PiRpcProcess implements PiRpcClient {
       return Promise.reject(new PiRpcError("protocol", "Pi RPC command has no type"));
     }
     const commandType = command.type;
+    if (commandType === "prompt" || commandType === "steer") this.#rememberSensitiveText(command.message);
     const id = `opentag-${this.#nextId}`;
     this.#nextId += 1;
+    const startedAt = performance.now();
+    const fields = { pid: this.#child.pid, requestId: id, command: commandType };
+    this.#logger.info(
+      { ...fields, operation: "pi_rpc_request", outcome: "started", timeoutMs },
+      "Sending Pi RPC request",
+    );
     return new Promise<unknown>((resolve, reject) => {
       const cleanup = () => {
         const pending = this.#pending.get(id);
@@ -158,34 +184,59 @@ export class PiRpcProcess implements PiRpcClient {
         this.#pending.delete(id);
         signal?.removeEventListener("abort", onAbort);
       };
-      const onAbort = () => {
+      const fail = (error: Error) => {
+        this.#logger.warn(
+          {
+            ...fields,
+            operation: "pi_rpc_request",
+            outcome: "failed",
+            durationMs: performance.now() - startedAt,
+            errorCode: error instanceof PiRpcError ? error.code : "unknown",
+            error: this.#sanitize(error.message),
+            ...this.#stderrFields(),
+          },
+          "Pi RPC request failed",
+        );
         cleanup();
-        reject(new PiRpcError("aborted", "Pi RPC request was aborted"));
+        reject(error);
       };
+      const onAbort = () => fail(new PiRpcError("aborted", "Pi RPC request was aborted"));
       const timer =
         timeoutMs === null
           ? undefined
           : setTimeout(() => {
-              cleanup();
-              reject(new PiRpcError("timeout", `Pi RPC request timed out: ${commandType}`));
+              fail(new PiRpcError("timeout", `Pi RPC request timed out: ${commandType}`));
             }, timeoutMs);
       timer?.unref();
       this.#pending.set(id, {
         command: commandType,
         timer,
         resolve: (value) => {
+          this.#logger.info(
+            {
+              ...fields,
+              operation: "pi_rpc_response",
+              outcome: "completed",
+              durationMs: performance.now() - startedAt,
+            },
+            "Received Pi RPC response",
+          );
           cleanup();
           resolve(value);
         },
-        reject: (error) => {
-          cleanup();
-          reject(error);
-        },
+        reject: fail,
       });
       signal?.addEventListener("abort", onAbort, { once: true });
-      void this.#write({ ...command, id }).catch((error: unknown) => {
-        this.#pending.get(id)?.reject(error as Error);
-      });
+      void this.#write({ ...command, id })
+        .then(() => {
+          this.#logger.info(
+            { ...fields, operation: "pi_rpc_write", outcome: "completed", durationMs: performance.now() - startedAt },
+            "Pi RPC request written",
+          );
+        })
+        .catch((error: unknown) => {
+          this.#pending.get(id)?.reject(error as Error);
+        });
     });
   }
 
@@ -267,6 +318,7 @@ export class PiRpcProcess implements PiRpcClient {
   }
 
   #onStderr(chunk: Buffer): void {
+    this.#stderrBytes += chunk.byteLength;
     if (this.#stderr.byteLength >= this.#maxStderrBytes) return;
     const remaining = this.#maxStderrBytes - this.#stderr.byteLength;
     this.#stderr = Buffer.concat([this.#stderr, chunk.subarray(0, remaining)]);
@@ -293,7 +345,7 @@ export class PiRpcProcess implements PiRpcClient {
         return;
       }
       if (message.success === false && typeof message.error === "string") {
-        pending.reject(new PiRpcError("command", `Pi rejected ${pending.command}: ${message.error}`));
+        pending.reject(new PiRpcError("command", `Pi rejected ${pending.command}: ${this.#sanitize(message.error)}`));
         return;
       }
       this.#fail(new PiRpcError("protocol", "Pi emitted an invalid RPC response"));
@@ -314,7 +366,18 @@ export class PiRpcProcess implements PiRpcClient {
     }
   }
 
-  #onExit(): void {
+  #onExit(code: number | null, signal: NodeJS.Signals | null): void {
+    const fields = {
+      operation: "pi_exit",
+      pid: this.#child.pid,
+      exitCode: code,
+      signal,
+      expected: this.#closing,
+      durationMs: this.#elapsed(),
+      ...this.#stderrFields(),
+    };
+    if (this.#closing && !this.#failure) this.#logger.info(fields, "Pi RPC process exited");
+    else this.#logger.warn(fields, "Pi RPC process exited");
     this.#closed = true;
     this.#resolveExit?.();
     this.#resolveExit = undefined;
@@ -327,15 +390,48 @@ export class PiRpcProcess implements PiRpcClient {
   }
 
   #onChildError(error: Error): void {
-    this.#fail(new PiRpcError("spawn", error.message));
+    this.#logger.warn(
+      {
+        operation: "pi_spawn",
+        outcome: "failed",
+        errorCode: "spawn",
+        durationMs: this.#elapsed(),
+        error: this.#sanitize(error.message),
+      },
+      "Pi RPC process failed",
+    );
+    this.#fail(new PiRpcError("spawn", this.#sanitize(error.message)));
     this.#closed = true;
     this.#resolveExit?.();
     this.#resolveExit = undefined;
   }
 
   #exitMessage(): string {
-    const stderr = this.#stderr.toString("utf8").trim();
+    const stderr = this.#sanitize(this.#stderr.toString("utf8").trim());
     return stderr ? `Pi RPC exited: ${stderr}` : "Pi RPC exited unexpectedly";
+  }
+
+  #elapsed(): number {
+    return performance.now() - this.#startedAt;
+  }
+
+  #sanitize(text: string): string {
+    for (const secret of this.#diagnosticSecrets) text = text.replaceAll(secret, "[REDACTED]");
+    return redactForLog(text);
+  }
+
+  #rememberSensitiveText(value: unknown): void {
+    if (typeof value === "string" && value) this.#diagnosticSecrets.push(value);
+    else if (Array.isArray(value)) for (const item of value) this.#rememberSensitiveText(item);
+    else if (isRecord(value)) for (const item of Object.values(value)) this.#rememberSensitiveText(item);
+  }
+
+  #stderrFields(): Record<string, unknown> {
+    return {
+      stderr: this.#sanitize(this.#stderr.toString("utf8")),
+      stderrBytes: this.#stderrBytes,
+      stderrTruncated: this.#stderrBytes > this.#stderr.byteLength || this.#stderr.byteLength > 4096,
+    };
   }
 
   #fail(error: Error): void {
@@ -375,4 +471,14 @@ async function settlesWithin(promise: Promise<void>, milliseconds: number): Prom
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function diagnosticSecrets(options: PiRpcSpawnOptions): string[] {
+  return [
+    ...(options.diagnosticSecrets ?? []),
+    ...Object.entries(options.env)
+      .filter(([key]) => /token|secret|password|api.?key|authorization/i.test(key))
+      .map(([, value]) => value ?? ""),
+    ...options.args.filter((_, index) => options.args[index - 1] === "--append-system-prompt"),
+  ].filter(Boolean);
 }

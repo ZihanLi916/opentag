@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiRpcError, PiRpcProcess } from "../providers/pi/rpc-wire.js";
+import { type RecordedLog, recordingLogger } from "./recording-logger.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-rpc.mjs", import.meta.url));
 const directories: string[] = [];
@@ -16,6 +17,151 @@ afterEach(async () => {
 });
 
 describe("PiRpcProcess", () => {
+  it("records write/response timing and scrubs credentials, prompt text, and bounded stderr on exit", async () => {
+    const child = fakeChild();
+    const logs: RecordedLog[] = [];
+    const rpc = new PiRpcProcess({
+      args: ["--append-system-prompt", "private-system-instructions"],
+      cwd: "/",
+      env: { API_KEY: "opaque-environment-credential", UNSET_TOKEN: undefined },
+      diagnosticSecrets: ["opaque-grant-credential"],
+      logger: recordingLogger(logs),
+      spawnProcess: () => child,
+    });
+    const state = rpc.request({ type: "get_state" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    child.stdout.write(
+      `${JSON.stringify({ type: "response", id: "opentag-1", command: "get_state", success: true, data: {} })}\n`,
+    );
+    await state;
+    const prompt = rpc.request({ type: "prompt", message: [{ type: "text", text: "private-user-message" }] });
+    const failed = expect(prompt).rejects.toMatchObject({ code: "exited" });
+    child.stderr.write(
+      "Error: extension boot failed Authorization: Bearer bearer-credential\nopaque-environment-credential opaque-grant-credential private-system-instructions private-user-message\n" +
+        "界".repeat(30_000),
+    );
+    child.emit("close", 17, null);
+    await failed;
+    const output = JSON.stringify(logs);
+    for (const secret of [
+      "bearer-credential",
+      "opaque-environment-credential",
+      "opaque-grant-credential",
+      "private-system-instructions",
+      "private-user-message",
+    ])
+      expect(output).not.toContain(secret);
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            operation: "pi_rpc_write",
+            command: "get_state",
+            durationMs: expect.any(Number),
+          }),
+        }),
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            operation: "pi_rpc_response",
+            command: "get_state",
+            durationMs: expect.any(Number),
+          }),
+        }),
+        expect.objectContaining({
+          level: "warn",
+          fields: expect.objectContaining({
+            operation: "pi_exit",
+            exitCode: 17,
+            signal: null,
+            expected: false,
+            stderrTruncated: true,
+          }),
+        }),
+        expect.objectContaining({
+          fields: expect.objectContaining({ operation: "pi_rpc_request", command: "prompt", errorCode: "exited" }),
+        }),
+      ]),
+    );
+    for (const log of logs)
+      if (typeof log.fields.stderr === "string") expect(Buffer.byteLength(log.fields.stderr)).toBeLessThanOrEqual(4096);
+    await rpc.close();
+  });
+
+  it("records unexpected stdin failures without exposing the prompt", async () => {
+    const child = fakeChild();
+    const logs: RecordedLog[] = [];
+    const rpc = new PiRpcProcess({
+      args: [],
+      cwd: "/",
+      env: {},
+      logger: recordingLogger(logs),
+      spawnProcess: () => child,
+    });
+    vi.spyOn(child.stdin, "write").mockImplementation(() => {
+      throw new Error("write failed private-prompt");
+    });
+    await expect(rpc.request({ type: "prompt", message: "private-prompt" })).rejects.toThrow("write failed");
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            operation: "pi_rpc_request",
+            errorCode: "unknown",
+            error: "write failed [REDACTED]",
+          }),
+        }),
+      ]),
+    );
+    const closing = rpc.close();
+    child.emit("close", 0, null);
+    await closing;
+  });
+
+  it("identifies a silent get_state timeout and a prompt rejection without logging response data", async () => {
+    const child = fakeChild();
+    const logs: RecordedLog[] = [];
+    const rpc = new PiRpcProcess({
+      args: [],
+      cwd: "/",
+      env: {},
+      requestTimeoutMs: 5,
+      logger: recordingLogger(logs),
+      spawnProcess: () => child,
+    });
+    await expect(rpc.request({ type: "get_state" })).rejects.toMatchObject({ code: "timeout" });
+    const prompt = rpc.request({ type: "prompt", message: "confidential-user-text" });
+    const failed = expect(prompt).rejects.toMatchObject({
+      code: "command",
+      message: expect.stringContaining("[REDACTED]"),
+    });
+    child.stdout.write(
+      `${JSON.stringify({ type: "response", id: "opentag-2", command: "prompt", success: false, error: "preflight failed confidential-user-text" })}\n`,
+    );
+    await failed;
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fields: expect.objectContaining({ command: "get_state", errorCode: "timeout" }) }),
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            command: "prompt",
+            errorCode: "command",
+            error: expect.stringContaining("preflight failed"),
+          }),
+        }),
+      ]),
+    );
+    const closing = rpc.close();
+    child.emit("close", null, "SIGTERM");
+    await closing;
+    expect(logs.at(-1)?.fields).toMatchObject({
+      operation: "pi_exit",
+      exitCode: null,
+      signal: "SIGTERM",
+      expected: true,
+    });
+    expect(JSON.stringify(logs)).not.toContain("confidential-user-text");
+  });
+
   it("exchanges correlated strict JSONL responses and events", async () => {
     const process = await rpcProcess("normal");
     const events: Readonly<Record<string, unknown>>[] = [];

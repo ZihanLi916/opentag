@@ -17,6 +17,7 @@ import {
   cloudJournalEntryKey,
 } from "../runner/cloud-journal.js";
 import { CLOUD_TURN_EXEC_TIMEOUT_GRACE_MS, CloudTurnRunner, type CloudTurnScope } from "../runner/cloud-turns.js";
+import { NativeSandboxError } from "../runner/native-sandbox.js";
 import { cloudDeliveryFixture } from "./cloud-turns.fixture.js";
 
 const MODEL_GRANT: RunnerCloudModelGrant = {
@@ -982,6 +983,73 @@ describe("CloudTurnRunner", () => {
       turnId: report.turnId,
       resultHash: report.resultHash,
     });
+    await h.runner.close();
+  });
+
+  it("forwards bounded redacted worker stderr with correlation without changing settlement", async () => {
+    const logs: string[] = [];
+    const stderr =
+      `${"x".repeat(3000)}\n`.repeat(100) + "Error: Pi get_state failed\nAuthorization: Bearer private-credential\n";
+    const h = harness({
+      worker: async () => ({ ...completedExec(), stderr }),
+      runnerOptions: { log: (line) => logs.push(line) },
+    });
+    await h.runner.handleDeliveryRun(runFrame(h.delivery));
+    await h.runner.handleVerified(verifiedFrame(h.delivery.requestId));
+    await waitFor(() => reportsOf(h.sent).length === 1, "diagnostic completion");
+    expect(reportsOf(h.sent)[0]?.report.outcome).toBe("completed");
+    const records = logs.map((line) => JSON.parse(line));
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: "cloud_worker_exit",
+          exitCode: 0,
+          deliveryId: h.delivery.deliveryId,
+          sessionId: h.delivery.sessionId,
+          durationMs: expect.any(Number),
+        }),
+      ]),
+    );
+    expect(logs.join("\n")).toContain("Pi get_state failed");
+    expect(logs.join("\n")).not.toContain("private-credential");
+    expect(Buffer.byteLength(logs.join(""))).toBeLessThan(66 * 1024);
+    await h.runner.close();
+  });
+
+  it("retains diagnostics when the native supervisor rejects execution", async () => {
+    const logs: string[] = [];
+    const h = harness({
+      worker: async () => {
+        throw new NativeSandboxError("exec_failed", "deadline exceeded", {
+          code: -1,
+          stderr: "Pi prompt pending\nAuthorization: Bearer diagnostic-secret",
+        });
+      },
+      runnerOptions: { log: (line) => logs.push(line) },
+    });
+    await h.runner.handleDeliveryRun(runFrame(h.delivery));
+    await h.runner.handleVerified(verifiedFrame(h.delivery.requestId));
+    await waitFor(() => reportsOf(h.sent).length === 1, "supervisor failure report");
+    expect(reportsOf(h.sent)[0]?.report.outcome).not.toBe("completed");
+    expect(logs.join("\n")).toContain("Pi prompt pending");
+    expect(logs.join("\n")).toContain('"exitCode":-1');
+    expect(logs.join("\n")).not.toContain("diagnostic-secret");
+    await h.runner.close();
+  });
+
+  it("keeps the worker outcome when the diagnostic sink throws", async () => {
+    const h = harness({
+      worker: async () => ({ ...completedExec(), stderr: "Pi diagnostic" }),
+      runnerOptions: {
+        log: () => {
+          throw new Error("log sink unavailable");
+        },
+      },
+    });
+    await h.runner.handleDeliveryRun(runFrame(h.delivery));
+    await h.runner.handleVerified(verifiedFrame(h.delivery.requestId));
+    await waitFor(() => reportsOf(h.sent).length === 1, "completion with broken log sink");
+    expect(reportsOf(h.sent)[0]?.report.outcome).toBe("completed");
     await h.runner.close();
   });
 

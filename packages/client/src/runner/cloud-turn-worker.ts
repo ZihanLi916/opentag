@@ -20,6 +20,7 @@ import {
   CLOUD_SANDBOX_CA_FILE,
   CLOUD_SLACK_API_PORT,
 } from "../cloud-runtime/sandbox-entry.js";
+import { createLogger } from "../observability/logger.js";
 import { PiAgentRuntimeFactory } from "../providers/pi/agent-runtime.js";
 import type { PiRpcProcessSpawnOptions } from "../providers/pi/rpc-wire.js";
 import { completionForError, completionForResult, type TurnCompletion } from "../runtime/agent-turn-runner.js";
@@ -381,6 +382,13 @@ export async function runCloudTurnWorker(
   request: RunnerCloudWorkerRequest,
   options: CloudTurnWorkerRunOptions,
 ): Promise<TurnCompletion> {
+  const runId = randomTurnRunId(request);
+  const logger = createLogger("cloud-turn-worker", { destination: "stderr", defaultLevel: "info" }).child(
+    cloudWorkerLogBindings(request, runId),
+  );
+  const startedAt = performance.now();
+  let phase = "prepare";
+  logger.info({ operation: "cloud_worker", phase, outcome: "started" }, "Cloud worker started");
   assertSafeInSandboxPath(request.executionDir, "execution directory");
   const executionMount = options.executionMount ?? CLOUD_EXECUTION_MOUNT;
   if (!request.executionDir.startsWith(`${executionMount}/`)) {
@@ -461,7 +469,7 @@ export async function runCloudTurnWorker(
     const runtimeEnvironment = environment as Record<string, string>;
     Object.assign(runtimeEnvironment, await cloudSessionCliEnvironment(request, scratch));
     // Internal children receive no IM outbox material. Visible callbacks retain the same scoped CLI path as IM Turns.
-    if (request.kind === "turn" || request.sessionKind === "visible") {
+    if (isVisibleCloudSession(request)) {
       const providerEnvironmentPath = join(scratch, "provider-environment.sh");
       await writeFile(
         providerEnvironmentPath,
@@ -480,6 +488,8 @@ export async function runCloudTurnWorker(
     const factory =
       options.createPiFactory?.({ environment: runtimeEnvironment, pids, sessionDirectory }) ??
       new PiAgentRuntimeFactory({
+        logger,
+        diagnosticSecrets: cloudWorkerDiagnosticSecrets(request),
         mcpAdapterEntry: CLOUD_PI_MCP_ADAPTER_ENTRY,
         process: {
           args: skillArgsOf(skillPaths),
@@ -505,18 +515,30 @@ export async function runCloudTurnWorker(
       ),
       workspace: { cwd: options.workspace, environment: runtimeEnvironment },
     };
+    phase = "restore_binding";
     const persisted = await readPersistedBinding(bindingFile);
     const activeRuntime = persisted
       ? await factory.resume({ ...common, binding: persisted })
       : await factory.create(common);
     runtime = activeRuntime;
+    logger.info(
+      {
+        operation: "cloud_worker",
+        phase,
+        outcome: "completed",
+        resuming: Boolean(persisted),
+        durationMs: performance.now() - startedAt,
+      },
+      "Cloud worker prepared Pi runtime",
+    );
+    phase = "pi_run";
 
     const onAbort = () => terminateTrackedProcesses(pids);
     execution.signal.addEventListener("abort", onAbort, { once: true });
     let completion: TurnCompletion;
     try {
       const result = await activeRuntime.prompt({
-        runId: randomTurnRunId(request),
+        runId,
         configuration,
         input: cloudWorkerInput(request, new Date(options.now?.() ?? Date.now())),
         signal: execution.signal,
@@ -533,7 +555,30 @@ export async function runCloudTurnWorker(
       await activeRuntime.close().catch(() => undefined);
       terminateTrackedProcesses(pids);
     }
+    logger.info(
+      {
+        operation: "cloud_worker",
+        phase,
+        outcome: completion.outcome,
+        errorCode: completion.errorReason,
+        durationMs: performance.now() - startedAt,
+      },
+      "Cloud worker finished",
+    );
     return completion;
+  } catch (error) {
+    logger.warn(
+      {
+        operation: "cloud_worker",
+        phase,
+        outcome: "failed",
+        errorCode: "worker_failed",
+        error: String(error),
+        durationMs: performance.now() - startedAt,
+      },
+      "Cloud worker failed",
+    );
+    throw error;
   } finally {
     registerRunnerSignalCleanup(undefined);
     await rm(scratch, { recursive: true, force: true });
@@ -712,4 +757,18 @@ async function prepareCliDirectories(environment: Record<string, string>, scratc
     await mkdir(directory, { mode: 0o700 });
     environment.LARKSUITE_CLI_CONFIG_DIR = directory;
   }
+}
+
+function cloudWorkerLogBindings(request: RunnerCloudWorkerRequest, runId: string): Readonly<Record<string, string>> {
+  return request.kind === "turn"
+    ? { runId, sessionId: request.delivery.sessionId, deliveryId: request.delivery.deliveryId }
+    : { runId, sessionId: request.message.targetSessionId, messageId: request.message.messageId };
+}
+
+function cloudWorkerDiagnosticSecrets(request: RunnerCloudWorkerRequest): string[] {
+  return [request.model.token, request.mcpGateway?.token ?? ""];
+}
+
+function isVisibleCloudSession(request: RunnerCloudWorkerRequest): boolean {
+  return request.kind === "turn" || request.sessionKind === "visible";
 }

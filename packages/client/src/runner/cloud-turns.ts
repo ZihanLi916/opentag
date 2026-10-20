@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { TurnActivityResult } from "@opentag/shared";
 import {
+  boundedSerialize,
   computeTurnResultHash,
   type DirectImMessageDeliveryRequest,
   MCP_GATEWAY_PATH,
@@ -18,6 +19,7 @@ import {
   type RunnerCloudSessionMessageSettledAckFrame,
   type RunnerCloudSessionMessageVerifiedFrame,
   RuntimeUsageSchema,
+  redactForLog,
   type SessionCliProofGrant,
   type SessionMessageDeliveryRequestV3,
   serializeRunnerCloudSessionWorkerStdin,
@@ -1419,7 +1421,11 @@ export class CloudTurnRunner {
       });
       const timeoutMs = turnTimeoutMs(delivery, Date.now()) + CLOUD_TURN_EXEC_TIMEOUT_GRACE_MS;
       this.#activity.start(delivery, entry.turnId);
-      return await this.#runWorker({ stdin, timeoutMs }, signal, execution);
+      return await this.#runWorker({ stdin, timeoutMs }, signal, execution, {
+        deliveryId: entry.deliveryId,
+        sessionId: delivery.sessionId,
+        turnId: entry.turnId,
+      });
     } finally {
       this.#activity.end(entry.turnId);
       await execution.close().catch((error) => this.#reportPersistenceError(error));
@@ -1541,7 +1547,11 @@ export class CloudTurnRunner {
         ...(this.#options.piSessionDirectory ? { piSessionDirectory: this.#options.piSessionDirectory } : {}),
       });
       const timeoutMs = Math.max(1, Date.parse(deadlineAt) - Date.now()) + CLOUD_TURN_EXEC_TIMEOUT_GRACE_MS;
-      return await this.#runWorker({ stdin, timeoutMs }, signal, execution);
+      return await this.#runWorker({ stdin, timeoutMs }, signal, execution, {
+        messageId: entry.messageId,
+        sessionId: message.targetSessionId,
+        turnId: entry.turnId,
+      });
     } finally {
       await execution.close().catch((error) => this.#reportPersistenceError(error));
     }
@@ -1552,6 +1562,7 @@ export class CloudTurnRunner {
     input: { stdin: string; timeoutMs: number },
     signal: AbortSignal,
     execution: CloudTurnExecutionHandle,
+    bindings: Readonly<Record<string, string>>,
   ): Promise<TurnCompletion> {
     const workerSignal = execution.bridgeFailureSignal
       ? AbortSignal.any([signal, execution.bridgeFailureSignal])
@@ -1564,9 +1575,11 @@ export class CloudTurnRunner {
           stdin: input.stdin,
           timeoutMs: input.timeoutMs,
         }));
+    const startedAt = performance.now();
     try {
       // The worker owns its runtime deadline; the exec backstop includes the reporting grace.
       const exec = await runWorker(input, workerSignal);
+      this.#logWorkerExit(exec.code, exec.stderr, bindings, performance.now() - startedAt);
       if (signal.aborted) {
         return { errorReason: "client_shutdown", executionEffects: "may_have_occurred", outcome: "cancelled" };
       }
@@ -1580,10 +1593,50 @@ export class CloudTurnRunner {
       }
       return completion;
     } catch (error) {
+      if (error instanceof NativeSandboxError && error.diagnostics) {
+        this.#logWorkerExit(error.diagnostics.code, error.diagnostics.stderr, bindings, performance.now() - startedAt);
+      }
       if (execution.bridgeFailure?.() && !signal.aborted) {
         return { errorReason: "turn_state_unknown", executionEffects: "may_have_occurred", outcome: "unknown" };
       }
       throw error;
+    }
+  }
+
+  #logWorkerExit(code: number, stderr: string, bindings: Readonly<Record<string, string>>, durationMs: number): void {
+    const lines = stderr.trim().split("\n").filter(Boolean).slice(-64);
+    const records: string[] = [];
+    let remaining = 64 * 1024;
+    for (const line of lines.reverse()) {
+      const record = boundedSerialize(
+        {
+          module: "cloud-worker",
+          ...bindings,
+          operation: "cloud_worker_stderr",
+          workerExitCode: code,
+          diagnostic: redactForLog(line),
+        },
+        8192,
+      );
+      remaining -= Buffer.byteLength(record, "utf8");
+      if (remaining < 0) break;
+      records.unshift(record);
+    }
+    try {
+      for (const record of records) this.#log(record);
+      this.#log(
+        boundedSerialize({
+          module: "cloud-worker",
+          ...bindings,
+          operation: "cloud_worker_exit",
+          exitCode: code,
+          durationMs,
+          stderrBytes: Buffer.byteLength(stderr, "utf8"),
+          diagnosticRecords: records.length,
+        }),
+      );
+    } catch {
+      // Diagnostics cannot change the worker's settlement.
     }
   }
 

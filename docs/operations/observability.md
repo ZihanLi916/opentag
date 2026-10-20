@@ -40,6 +40,7 @@ The client logger follows this `OPENTAG_LOG_LEVEL` matrix:
 | Tests | unset | `silent` |
 | Service mode or explicit `file`/`dual` destination | unset | `info` |
 | One-shot client with no configured destination | unset | `warn` |
+| Cloud Turn worker stderr | unset outside tests | `info` |
 | Any mode | valid `trace`, `debug`, `info`, `warn`, `error`, `fatal`, or `silent` | The selected level |
 | Any mode | invalid value | `info`, plus one safe warning |
 
@@ -50,6 +51,30 @@ editing the LaunchAgent or systemd unit.
 `imAttrs()` and `runtimeAttrs()` are OpenTelemetry helpers. They emit dotted span keys such as
 `opentag.im.binding.id` and `opentag.runtime.connection.id`; do **not** pass their result as a Pino payload. Map values to
 the fixed camelCase Pino vocabulary instead.
+
+## Pi startup and Cloud worker diagnostics
+
+Cloud workers emit bounded structured diagnostics to stderr independently of the stdout completion
+protocol. They default to `info`; an explicit `OPENTAG_LOG_LEVEL` still takes precedence. The parent
+Runner relays at most 64 trailing nonempty stderr lines within a 64 KiB total record budget, adds
+Session/Delivery (or message)/Turn correlation and the worker exit code, and emits a worker-exit
+summary. A diagnostic sink failure cannot change settlement.
+
+Pi logs `pi_spawn`, `pi_rpc_request`, `pi_rpc_write`, `pi_rpc_response`, and `pi_exit`. RPC records
+contain the command and request ID, elapsed milliseconds from request submission, and the configured
+timeout. A completed write proves only that stdin accepted the JSONL bytes; the matching response
+proves Pi handled that command. Process creation does not prove Pi initialization completed.
+`pi_run_phase`/`pi_run` distinguish `spawn`, `get_state`, `restore_session`, `prompt_preflight`, and
+`execution`; failed runs include both total and current-phase duration. Native compaction progress
+marks whether prompt acceptance is pending and retains the existing compaction-aware timeout.
+
+Exit records include PID, code, signal, expected shutdown, lifetime, stderr byte count and truncation.
+Request failures include a scrubbed stderr excerpt even when Pi remains alive. Pi captures at most
+64 KiB of stderr and applies shared redaction before the 4 KiB UTF-8 log-field limit. Known Cloud
+model/MCP credentials, sensitive environment values, the appended system prompt, and sent prompt
+strings are also scrubbed. Arguments, environment, request bodies, response data, and provider event
+bodies are never logged by this diagnostic path. These records identify the failing boundary; they
+do not recover exceptions from an earlier image that did not emit them.
 
 ## Configuration
 

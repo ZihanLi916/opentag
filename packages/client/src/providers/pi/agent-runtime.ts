@@ -38,7 +38,7 @@ import {
   assertSystemPrompt,
   runWithAbortSignal,
 } from "../../agent-runtime/validation.js";
-import { createLogger } from "../../observability/logger.js";
+import { type ClientLogger, createLogger } from "../../observability/logger.js";
 import {
   PI_RPC_REQUEST_TIMEOUT_MS,
   type PiRpcClient,
@@ -106,6 +106,7 @@ const PI_MCP_GATEWAY_EXTENSION = fileURLToPath(new URL("../../pi-extensions/mcp-
 const PI_MCP_GATEWAY_BUNDLED_EXTENSION = fileURLToPath(new URL("./pi-extensions/mcp-gateway.mjs", import.meta.url));
 
 interface PiRuntimeOptions {
+  readonly logger?: ClientLogger;
   readonly mcpAdapterEntry?: string;
   readonly binding: AgentRuntimeBinding;
   readonly configuration?: AgentRunConfiguration;
@@ -121,6 +122,8 @@ interface PiRuntimeOptions {
 }
 
 export interface PiAgentRuntimeFactoryOptions {
+  readonly logger?: ClientLogger;
+  readonly diagnosticSecrets?: readonly string[];
   /** Trusted Cloud image path; Local resolves its pinned Client dependency. */
   readonly mcpAdapterEntry?: string;
   readonly process?: {
@@ -186,6 +189,7 @@ interface PiPromptAcceptanceClock {
 }
 
 export class PiAgentRuntime extends BaseAgentRuntime {
+  readonly #logger: ClientLogger;
   readonly #mcpAdapterEntry?: string;
   readonly #sessionId: string;
   readonly #policy: AgentRuntimePolicy;
@@ -230,6 +234,7 @@ export class PiAgentRuntime extends BaseAgentRuntime {
     });
     const binding = parsePiBinding(options.binding);
     this.#sessionId = binding.sessionId;
+    this.#logger = (options.logger ?? logger).child({ providerSessionId: binding.sessionId });
     this.#sessionFileHash = binding.sessionFileHash;
     this.#policy = options.policy;
     this.#mcpAdapterEntry = options.mcpAdapterEntry;
@@ -253,6 +258,20 @@ export class PiAgentRuntime extends BaseAgentRuntime {
     let client: PiRpcClient | undefined;
     let cleanupFailure: Error | undefined;
     let result: AgentProviderRunResult;
+    const runLogger = this.#logger.child({ runId: request.runId });
+    const startedAt = performance.now();
+    let phase = "spawn";
+    let phaseStartedAt = startedAt;
+    const nextPhase = (next: string) => {
+      runLogger.info(
+        { operation: "pi_run_phase", phase, outcome: "completed", durationMs: performance.now() - phaseStartedAt },
+        "Pi run phase completed",
+      );
+      phase = next;
+      phaseStartedAt = performance.now();
+      runLogger.info({ operation: "pi_run_phase", phase, outcome: "started" }, "Pi run phase started");
+    };
+    runLogger.info({ operation: "pi_run_phase", phase, outcome: "started" }, "Pi run phase started");
     try {
       client = this.#createClient(
         this.#arguments(request),
@@ -260,21 +279,40 @@ export class PiAgentRuntime extends BaseAgentRuntime {
       );
       this.#client = client;
       this.#unsubscribe = client.subscribe((message) => this.#enqueue(message));
+      nextPhase("get_state");
       const state = requireRecord(
         await client.request({ type: "get_state" }, context.signal),
         "Pi get_state returned invalid data",
       );
+      nextPhase("restore_session");
       await this.#restoreSessionState(state, context);
+      nextPhase("prompt_preflight");
       await this.#requestPrompt(client, piInput(request), context.signal);
+      nextPhase("execution");
       const terminal = await this.#terminal?.promise;
       /* v8 ignore next -- resetRun always creates the terminal before Provider I/O begins. */
       if (!terminal) throw protocolError("Pi run has no terminal state");
       await this.#eventTail;
       if (this.#providerFailure) throw this.#providerFailure;
       result = this.#runResult(terminal);
+      runLogger.info(
+        { operation: "pi_run", phase, outcome: result.status, durationMs: performance.now() - startedAt },
+        "Pi run finished",
+      );
     } catch (error) {
       const failure = error instanceof Error ? error : new Error("Pi run failed");
-      logger.debug({ code: "provider_run_failed", error: failure.message }, "Pi provider run failed");
+      runLogger.warn(
+        {
+          operation: "pi_run",
+          phase,
+          outcome: "failed",
+          durationMs: performance.now() - startedAt,
+          phaseDurationMs: performance.now() - phaseStartedAt,
+          errorCode: piDiagnosticErrorCode(failure),
+          error: failure.message,
+        },
+        "Pi provider run failed",
+      );
       this.#promptAccepted?.reject(failure);
       const causalFailure = this.#providerFailure ?? failure;
       if (!context.signal.aborted && isIrrecoverablePiFailure(causalFailure)) this.closeForProviderFailure();
@@ -485,6 +523,16 @@ export class PiAgentRuntime extends BaseAgentRuntime {
 
   #enqueue(message: Readonly<Record<string, unknown>>): void {
     this.#claimTerminalAtIngress(message);
+    if (message.type === "compaction_start" || message.type === "compaction_end") {
+      this.#logger.info(
+        {
+          operation: "pi_compaction",
+          event: message.type,
+          awaitingAcceptance: this.#promptAcceptanceClock !== undefined,
+        },
+        "Pi compaction progress",
+      );
+    }
     if (message.type === "compaction_start") {
       this.#compacting = true;
       this.#promptAcceptanceClock?.pause();
@@ -874,6 +922,7 @@ export class PiAgentRuntime extends BaseAgentRuntime {
 }
 
 export class PiAgentRuntimeFactory implements AgentRuntimeFactory {
+  readonly #logger: ClientLogger;
   readonly #mcpAdapterEntry?: string;
   readonly manifest = PI_AGENT_RUNTIME_MANIFEST;
   readonly #createSessionId: () => string;
@@ -892,6 +941,7 @@ export class PiAgentRuntimeFactory implements AgentRuntimeFactory {
   readonly #promptAcceptanceTimeoutMs?: number;
 
   constructor(options: PiAgentRuntimeFactoryOptions = {}) {
+    this.#logger = options.logger ?? logger;
     if (options.mcpAdapterEntry && !isAbsolute(options.mcpAdapterEntry)) {
       throw new AgentRuntimeError("configuration_invalid", "Pi mcpAdapterEntry must be an absolute path");
     }
@@ -934,6 +984,8 @@ export class PiAgentRuntimeFactory implements AgentRuntimeFactory {
           maxStderrBytes: options.process?.maxStderrBytes,
           requestTimeoutMs: options.process?.requestTimeoutMs,
           spawnProcess: options.process?.spawnProcess,
+          logger: this.#logger,
+          diagnosticSecrets: options.diagnosticSecrets,
         }));
     this.#probeRunner = options.probeRunner ?? ((signal) => probePi(command, environment, signal, probeTimeoutMs));
   }
@@ -1029,6 +1081,7 @@ export class PiAgentRuntimeFactory implements AgentRuntimeFactory {
       await request.eventSink({ type: "binding_changed", binding });
       return new PiAgentRuntime({
         binding,
+        logger: this.#logger,
         ...(this.#mcpAdapterEntry ? { mcpAdapterEntry: this.#mcpAdapterEntry } : {}),
         configuration: request.configuration,
         createClient: (args, extraEnvironment) =>
@@ -1600,4 +1653,8 @@ function fingerprint(value: string): string {
 /** Local event reference only; the original provider ID stays unchanged in Pi's Session and model requests. */
 function piToolEventId(id: string): string {
   return Buffer.byteLength(id, "utf8") <= AGENT_RUNTIME_ID_MAX_BYTES ? id : `pi-tool-${fingerprint(id)}`;
+}
+
+function piDiagnosticErrorCode(error: Error): string {
+  return error instanceof PiRpcError ? error.code : "provider_error";
 }

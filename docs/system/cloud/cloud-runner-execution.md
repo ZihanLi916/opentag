@@ -537,3 +537,12 @@ select the older Server and compatible Runner target. An older Runner cannot con
 Instance never recovers its unacknowledged receipts or settlements, which must not be blindly replayed. The Session's
 confirmed saved workspace restores normally on the next allocation; protocol compatibility does not guarantee arbitrary
 persisted-data downgrades.
+
+## Pi execution diagnostics
+
+The worker writes structured startup, `get_state`, session restoration and prompt-preflight timing
+to stderr. The parent relays a bounded, redacted tail with Session/Turn correlation and worker exit
+status, leaving stdout reserved for the completion protocol. Pi exit records retain code, signal
+and a scrubbed bounded stderr excerpt; failures while Pi is alive retain the excerpt as well.
+See [Pi startup and Cloud worker diagnostics](../../operations/observability.md#pi-startup-and-cloud-worker-diagnostics)
+for fields, limits and the distinction between stdin write completion and an RPC response.

@@ -30,6 +30,18 @@ afterEach(async () => {
 });
 
 describe("Client logger", () => {
+  it("uses the worker's info default on stderr and honors an explicit override", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    delete process.env.OPENTAG_LOG_LEVEL;
+    createLogger("cloud-turn-worker", { destination: "stderr", defaultLevel: "info" }).info({}, "Pi startup");
+    expect(stderrWrites.write).toHaveBeenCalledWith(2, expect.stringContaining("Pi startup"));
+    stderrWrites.write.mockClear();
+    process.env.OPENTAG_LOG_LEVEL = "error";
+    createLogger("cloud-turn-worker", { destination: "stderr", defaultLevel: "info" }).warn({}, "Suppressed");
+    expect(stderrWrites.write).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
   it("does not create the service log directory until the first write", async () => {
     const root = await temporaryDirectory();
     const directory = join(root, "nested", "logs");

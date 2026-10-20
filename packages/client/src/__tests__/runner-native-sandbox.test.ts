@@ -609,6 +609,25 @@ describe("native sandbox launch, probe, and exec failure classification", () => 
     expect(result.stdout).toBe("HELLO STDIN");
   });
 
+  it("retains bounded worker stderr and exit code when native execution times out", async () => {
+    const workspace = await temporaryDirectory("opentag-native-diagnostic-");
+    const sandbox = new NativeSandbox({
+      name: "ots-x",
+      workspace,
+      spawnProcess: () => {
+        const child = fakeChild({ code: 0 });
+        child.stdin.end = () => {
+          child.stderr.emit("data", Buffer.from("Pi get_state pending"));
+        };
+        return child as never;
+      },
+    });
+    await expect(sandbox.exec(SANDBOX_NODE, ["worker"], { timeoutMs: 5 })).rejects.toMatchObject({
+      code: "exec_failed",
+      diagnostics: { code: -1, stderr: "Pi get_state pending" },
+    });
+  });
+
   it("classifies an exec deadline, a cancellation, and a spawn failure", async () => {
     const workspace = await temporaryDirectory("opentag-native-sandbox-");
     await expect(
