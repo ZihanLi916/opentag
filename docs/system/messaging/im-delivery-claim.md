@@ -32,6 +32,41 @@ the existing claim marker or recovery lease. Each scan attempts at most eight su
 Pending ingress expiry uses the database clock, as before. The existing dispatch, steer, receipt,
 report, cancellation, retry, and timeout state transitions still apply.
 
+## Runtime budget and accepted recovery
+
+Message retention is an ingress deadline, not an execution budget. A Local or Cloud Client Turn
+uses the explicit `runtime.budget.maxDurationMs`, or the existing 30-minute default when it is
+absent, then takes the smaller of that budget and the remaining message deadline. An explicit
+budget may exceed the default. An already expired request produces a timeout report without
+starting the Provider, with `executionEffects: not_started`. Execution and Slack activity use the
+same budget calculation; a running Provider must still honor abort and complete its native cleanup
+before the Client can report. A Client upgrade does not change an already running Turn's timer.
+
+For accepted Local custody, a reconcile response does not settle the delivery. `busy`, `running`,
+`reporting`, `recovery_required`, and `rejected` are recorded as distinct deferred status codes.
+`ready` and `stopped` without a recorded report mean `IM_DELIVERY_RECOVERY_AWAITING_REPORT`.
+`busy`, `running`, and `reporting` keep the operation span's `deferred` outcome and retry metric
+without emitting an error diagnostic. Transport failures, `rejected`, `recovery_required`, and
+unreported `ready`/`stopped` responses remain diagnostic. The stopped reconciliation used here
+returns `busy / active_turn` for live activity; `running` and `reporting` are handled defensively,
+not observed from this request shape.
+These responses and reconcile transport failures use the existing capped exponential schedule:
+2, 4, 8, 16, then 30 seconds, based on the post-claim attempt count. A retry update applies only
+while the delivery is still accepted, unreported, and at that attempt; a late report or newer
+attempt wins. The response never fabricates a report, expires accepted custody, or dispatches
+the input again. Only the actual report settles custody.
+
+Deferred response codes do not mark a target Turn ended for its steered children, including
+`rejected`, `recovery_required`, and awaiting-report responses. After retry backoff expires, the
+janitor preserves those children and their target identity. Its stale-failure recovery uses only
+`IM_DELIVERY_RECOVERY_FAILED`, `IM_DELIVERY_RUNTIME_UNAVAILABLE`, `IM_DELIVERY_PLACEMENT_STALE`,
+`IM_DELIVERY_RECOVERY_PAYLOAD_INVALID`, and `IM_DELIVERY_AGENT_CUSTODY_FENCED`. An unknown code is
+not proof that the target ended. Existing terminal-report and ended-Session recovery still apply.
+
+`busy / active_turn` can include report custody. An empty retained-report manifest does not prove
+that the Client has no report on disk: live activity can prevent recovery from enumerating it.
+Offline Computer retry and final-abandonment policy are separate from this response backoff.
+
 Undispatched Cloud inputs retain provider order within a Session, including an earlier input in
 retry backoff or locked by another worker. A narrow `LATERAL` lookup reads each pending input's
 message by primary key and lets PostgreSQL order the message fields. A persisted dispatch or claim
