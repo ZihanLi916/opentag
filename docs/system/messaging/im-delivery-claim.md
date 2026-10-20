@@ -65,9 +65,13 @@ Turn through the existing report identity and ownership checks.
 A recorded `completed` report keeps the children steered. Recording a valid `failed`, `cancelled`,
 or `unknown` report requeues them once in the same transaction; replaying the report cannot requeue
 them again. The janitor can recover children of an already recorded non-completed report or an
-explicitly disposed target. A missing report can therefore retain custody indefinitely, including
-after Session closure. Abandonment and ownership fencing require a separate policy; maintenance
-does not synthesize a terminal report.
+explicitly disposed target. Routine retention also excludes a steered child while its target remains
+accepted and unreported, so the child delivery continues to reference and retain its original
+message after the Session and normal history windows end. Once a target records `completed`, its
+steered children return to bounded history retention; the other terminal reports requeue them before
+retention. A missing report can therefore retain custody indefinitely, including after Session
+closure. Abandonment and ownership fencing require a separate policy; maintenance does not
+synthesize a terminal report.
 
 `busy / active_turn` can include report custody. An empty retained-report manifest does not prove
 that the Client has no report on disk: live activity can prevent recovery from enumerating it.

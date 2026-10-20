@@ -23,7 +23,7 @@ import {
   users,
 } from "../../db/schema/index.js";
 import { ConnectionRegistry } from "../../runtime/connection-registry.js";
-import { runImDeliveryExpiry } from "../../runtime/im-delivery-janitor.js";
+import { runImDeliveryExpiry, runImDeliveryJanitor } from "../../runtime/im-delivery-janitor.js";
 import { STEER_TARGET_ENDED_ERROR_CODE } from "../../runtime/im-delivery-recovery.js";
 import { ImDeliveryWorker } from "../../runtime/im-delivery-worker.js";
 import { PostgresRuntimeCustodyStore } from "../../runtime/runtime-custody-store.js";
@@ -289,6 +289,81 @@ describe("steered IM delivery recovery", () => {
 
     expect(requestDelivery).toHaveBeenCalledTimes(1);
     expect((await deliveryRows(client.database, fixture)).children[0]?.state).toBe("accepted");
+  });
+
+  it.each([
+    ["failed", "turn_timeout"],
+    ["cancelled", "client_shutdown"],
+    ["unknown", "turn_state_unknown"],
+  ] as const)(
+    "preserves aged custody until a delayed %s report recovers both children once",
+    async (outcome, reason) => {
+      const fixture = await createFixture(client.database);
+      let clock = fixture.now.getTime();
+      const custody = new PostgresRuntimeCustodyStore(client.database, { now: () => new Date(clock) });
+      await acceptAndSteer(fixture, custody);
+      await client.database
+        .update(sessions)
+        .set({ endedAt: new Date(clock + 1_000) })
+        .where(eq(sessions.id, fixture.sessionId));
+      await client.database
+        .update(imMessageDeliveries)
+        .set({ expiresAt: fixture.now })
+        .where(eq(imMessageDeliveries.sessionId, fixture.sessionId));
+
+      clock += 91 * 24 * 60 * 60 * 1_000;
+      await runImDeliveryJanitor(client.database, janitorOptions(new Date(clock)));
+
+      const retained = await deliveryRows(client.database, fixture);
+      expect(retained.root).toMatchObject({ state: "accepted", reportedAt: null });
+      expect(retained.children).toHaveLength(2);
+      for (const child of retained.children) {
+        expect(child).toMatchObject({ state: "steered", steerTargetDeliveryId: fixture.rootDeliveryId });
+      }
+      expect(await scopedMessageIds(client.database, fixture)).toEqual(expectedMessageIds(fixture));
+
+      const report = turnReport(fixture, outcome, reason);
+      await expect(custody.recordTurn(report, fixture.context)).resolves.toBe("recorded");
+      const recovered = await deliveryRows(client.database, fixture);
+      expect(recovered.children).toHaveLength(2);
+      for (const child of recovered.children) {
+        expect(child).toMatchObject({
+          state: "pending",
+          steerTargetDeliveryId: null,
+          attemptCount: 1,
+          lastErrorCode: STEER_TARGET_ENDED_ERROR_CODE,
+        });
+      }
+      expect(await scopedMessageIds(client.database, fixture)).toEqual(expectedMessageIds(fixture));
+
+      await expect(custody.recordTurn({ ...report, requestId: randomUUID() }, fixture.context)).resolves.toBe(
+        "already_recorded",
+      );
+      expect(await deliveryRows(client.database, fixture)).toEqual(recovered);
+    },
+  );
+
+  it("keeps completed steered history eligible for bounded retention", async () => {
+    const fixture = await createFixture(client.database);
+    let clock = fixture.now.getTime();
+    const custody = new PostgresRuntimeCustodyStore(client.database, { now: () => new Date(clock) });
+    await acceptAndSteer(fixture, custody);
+    await expect(custody.recordTurn(turnReport(fixture, "completed"), fixture.context)).resolves.toBe("recorded");
+    await client.database
+      .update(sessions)
+      .set({ endedAt: new Date(clock + 1_000) })
+      .where(eq(sessions.id, fixture.sessionId));
+    await client.database
+      .update(imMessageDeliveries)
+      .set({ expiresAt: fixture.now })
+      .where(eq(imMessageDeliveries.sessionId, fixture.sessionId));
+
+    clock += 91 * 24 * 60 * 60 * 1_000;
+    await runImDeliveryJanitor(client.database, janitorOptions(new Date(clock)));
+    await runImDeliveryJanitor(client.database, janitorOptions(new Date(clock)));
+
+    expect(await scopedDeliveryIds(client.database, fixture)).toEqual([]);
+    expect(await scopedMessageIds(client.database, fixture)).toEqual([]);
   });
 
   it("leaves completed target children steered after the janitor runs", async () => {
@@ -562,6 +637,32 @@ async function deliveryRows(database: ReturnType<typeof createDatabaseClient>["d
     return child;
   });
   return { root, children };
+}
+
+function expectedMessageIds(fixture: Fixture): string[] {
+  return [fixture.rootRequest.imMessageId, ...fixture.steerRequests.map((request) => request.imMessageId)].sort();
+}
+
+async function scopedDeliveryIds(
+  database: ReturnType<typeof createDatabaseClient>["database"],
+  fixture: Fixture,
+): Promise<string[]> {
+  const rows = await database
+    .select({ id: imMessageDeliveries.id })
+    .from(imMessageDeliveries)
+    .where(inArray(imMessageDeliveries.messageId, expectedMessageIds(fixture)));
+  return rows.map((row) => row.id).sort();
+}
+
+async function scopedMessageIds(
+  database: ReturnType<typeof createDatabaseClient>["database"],
+  fixture: Fixture,
+): Promise<string[]> {
+  const rows = await database
+    .select({ id: imMessages.id })
+    .from(imMessages)
+    .where(inArray(imMessages.id, expectedMessageIds(fixture)));
+  return rows.map((row) => row.id).sort();
 }
 
 function janitorOptions(now: Date) {

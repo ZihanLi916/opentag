@@ -1,6 +1,7 @@
 # Steered IM custody without terminal reports
 
-Date: 2026-10-20. Base: `af9705a345b6ce1dde47e7870cfc450d1564edf2`.
+Date: 2026-10-20. Original base: `af9705a345b6ce1dde47e7870cfc450d1564edf2`.
+Retention follow-up base: `8381cab43d5ef253e160f0ca28520fe490827c34`.
 Contract: [IM delivery claim queries](../../docs/system/messaging/im-delivery-claim.md).
 All inputs are synthetic. PostgreSQL runs in local testcontainers; no user Computer, model,
 external message, or production operation is involved.
@@ -21,10 +22,17 @@ external message, or production operation is involved.
 - Valid failed, cancelled, and unknown reports recover children once in ingress order. Report
   replay, a conflicting completed report, and later janitor sweeps cannot recover them again.
   A pre-existing recorded non-completed report also remains recoverable by the janitor.
+- Real PostgreSQL cases end the Session, move delivery and message history 91 days past the default
+  retention cutoff, and run the production expiry plus retention maintenance. An accepted,
+  unreported target still retains both steered child deliveries and their messages. Delayed failed,
+  cancelled, and unknown reports each recover both children exactly once. A completed-target control
+  proves the same aged steered history remains retention-eligible and is removed by bounded sweeps.
 
 Before the production change, the new unit cases failed six times (five error codes and Session
 closure), and all three PostgreSQL disconnect/Session cases failed because maintenance requeued
-children. After removing those inferred termination paths, the focused suites pass.
+children. Before the retention follow-up, all three 91-day delayed-report cases failed because
+maintenance deleted both children. After protecting only children of accepted-unreported targets,
+the focused suites pass while the completed control remains bounded.
 
 Focused commands:
 
@@ -36,9 +44,9 @@ pnpm --filter @opentag/server exec vitest run src/__tests__/integration/im-steer
 ## Validation
 
 - Focused unit tests: 86 passed in four files.
-- Focused PostgreSQL integration: 16 passed.
+- Focused PostgreSQL integration: 20 passed.
 - `pnpm check`, `pnpm build`, and `pnpm typecheck` passed.
-- Full PostgreSQL integration: 798 passed in 61 files.
+- Full PostgreSQL integration: 802 passed in 61 files.
 - Agent Runtime coverage: 642 passed, with 100% statements, branches, functions, and lines.
 - `pnpm test`: 691 script tests and 10,017 workspace tests passed; 22 existing skips.
   Server tests executed; unchanged workspace tasks reused matching Turbo cache entries.

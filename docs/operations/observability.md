@@ -147,11 +147,13 @@ every 60 seconds by default because its 90-day window does not need the expiry c
 | `OPENTAG_SLACK_WEBHOOK_RECEIPTS_RETENTION_MS` | 30 days | Slack receipt retention window |
 | `OPENTAG_FEISHU_INBOUND_RECEIPTS_RETENTION_MS` | 30 days | Feishu receipt retention window |
 
-The janitor never removes a delivery belonging to a live Session, a delivery still referenced as a steer target, or
-an in-flight (`processing`) receipt. It removes only terminal delivery rows (`expired`, `terminal_rejected`, reported
-`accepted`, or completed `steered` rows), and removes a message only after no delivery references it. Set explicit
-windows and batch sizes through the environment when the deployment needs a different audit period; values must be
-positive integers in milliseconds or rows.
+The janitor never removes a delivery belonging to a live Session, a delivery still referenced as a steer target, a
+steered child whose target remains `accepted` and unreported, or an in-flight (`processing`) receipt. It removes only
+terminal delivery rows (`expired`, `terminal_rejected`, reported `accepted`, or `steered` rows whose target no longer
+holds accepted-unreported custody), and removes a message only after no delivery references it. A completed target's
+steered children therefore remain bounded by the configured history windows, while unresolved custody can outlive
+those windows. Set explicit windows and batch sizes through the environment when the deployment needs a different
+audit period; values must be positive integers in milliseconds or rows.
 
 ## Troubleshooting a silent Feishu Bot
 

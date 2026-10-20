@@ -271,7 +271,17 @@ export async function runImDeliveryRetention(
           and (
             delivery.state in ('expired', 'terminal_rejected')
             or (delivery.state = 'accepted' and delivery.reported_at is not null)
-            or (delivery.state = 'steered' and delivery.steered_at is not null)
+            or (
+              delivery.state = 'steered'
+              and delivery.steered_at is not null
+              and not exists (
+                select 1
+                from im_message_deliveries as target
+                where target.id = delivery.steer_target_delivery_id
+                  and target.state = 'accepted'
+                  and target.reported_at is null
+              )
+            )
           )
           and not exists (
             select 1
