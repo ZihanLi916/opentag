@@ -3,7 +3,7 @@ import type { DatabaseClient } from "../db/client.js";
 import type { BackgroundFailureSupervisor } from "../observability/background-failure-supervisor.js";
 import { expireInboundReceiptWork } from "../services/im/inbound-receipt-work-store.js";
 import { SessionService } from "../services/sessions/session-service.js";
-import { requeueSteeredDeliveries } from "./im-delivery-recovery.js";
+import { lockSteeredRecoverySessions, requeueSteeredDeliveries } from "./im-delivery-recovery.js";
 
 const DEFAULT_JANITOR_INTERVAL_MS = 5_000;
 const DEFAULT_RETENTION_INTERVAL_MS = 60_000;
@@ -52,31 +52,43 @@ export async function runImDeliverySteerRecovery(
 ): Promise<void> {
   const now = options.clock();
   const sessionService = new SessionService(database);
-  await database.transaction(async (transaction) => {
-    const targets = (await transaction.execute(sql`
-      select target.id as target_id
-      from im_message_deliveries as target
-      where exists (
-        select 1
-        from im_message_deliveries as child
-        where child.state = 'steered'
-          and child.steer_target_delivery_id = target.id
-      )
-        and (
-          target.state <> 'accepted'
-          or (
-            target.reported_at is not null
-            and coalesce(target.turn_report ->> 'outcome', 'unknown') <> 'completed'
-          )
-        )
-      order by target.id asc
-      limit ${options.expiryBatchSize}
-      for update of target skip locked
-    `)) as Array<{ target_id: string }>;
-    for (const target of targets) {
-      await requeueSteeredDeliveries(transaction, target.target_id, now, sessionService);
-    }
-  });
+  const eligible = sql`
+    exists (
+      select 1 from im_message_deliveries as child
+      where child.state = 'steered' and child.steer_target_delivery_id = target.id
+    )
+    and (
+      target.state <> 'accepted'
+      or (target.reported_at is not null and coalesce(target.turn_report ->> 'outcome', 'unknown') <> 'completed')
+    )
+  `;
+  const candidates = (await database.execute(sql`
+    select target.id as target_id
+    from im_message_deliveries as target
+    where ${eligible}
+    order by target.id asc
+    limit ${options.expiryBatchSize}
+  `)) as Array<{ target_id: string }>;
+  for (const candidate of candidates) {
+    await database.transaction(async (transaction) => {
+      const lockedSessions = await lockSteeredRecoverySessions(transaction, [candidate.target_id], {
+        skipLocked: true,
+      });
+      if (lockedSessions.length === 0) return;
+      const [target] = (await transaction.execute(sql`
+        select target.id as target_id
+        from im_message_deliveries as target
+        where target.id = ${candidate.target_id}::uuid
+          and target.session_id in (${sql.join(
+            lockedSessions.map((session) => sql`${session.id}::uuid`),
+            sql`, `,
+          )})
+          and ${eligible}
+        for update of target skip locked
+      `)) as Array<{ target_id: string }>;
+      if (target) await requeueSteeredDeliveries(transaction, target.target_id, now, sessionService);
+    });
+  }
 }
 
 export function resolveImDeliveryJanitorConfig(input: ImDeliveryJanitorInput): ImDeliveryJanitorConfig {
