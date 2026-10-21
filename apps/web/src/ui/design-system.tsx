@@ -142,14 +142,19 @@ export {
 
 // Kumo's conditional generic props distribute differently through JSX. The implementation accepts
 // their complete union; retain the original generic call signature for product callers.
-export const Text = ((props: Parameters<typeof KumoText>[0]) => (
+type TextVariant = NonNullable<Parameters<typeof KumoText>[0]["variant"]>;
+type HeadingSize = "page" | "section";
+export const Text = (({ headingSize, ...props }: Parameters<typeof KumoText>[0] & { headingSize?: HeadingSize }) => (
   <KumoText
     {...props}
+    data-heading-size={headingSize}
     data-text-size={props.size ?? "base"}
     data-text-variant={props.variant ?? "body"}
     DANGEROUS_className={classes("ui-text", props.DANGEROUS_className)}
   />
-)) as typeof KumoText;
+)) as <Variant extends TextVariant = "body">(
+  props: Parameters<typeof KumoText<Variant>>[0] & { headingSize?: HeadingSize },
+) => ReturnType<typeof KumoText>;
 
 export const Toolbar: typeof KumoToolbar = Object.assign(
   forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof KumoToolbar>>(function Toolbar(props, ref) {
@@ -185,6 +190,7 @@ export const Input: typeof KumoInput = forwardRef<HTMLInputElement, KumoInputPro
       ref={ref}
       size={size}
       data-control-size={size}
+      data-control-error={Boolean(props.error) || props.variant === "error" || undefined}
       className={
         typeof className === "function"
           ? (state) => classes("ui-control ring-kumo-interact", className(state))
@@ -197,7 +203,14 @@ export const InputArea: typeof KumoInputArea = forwardRef<HTMLTextAreaElement, K
   { className, ...props },
   ref,
 ) {
-  return <KumoInputArea {...props} ref={ref} className={classes("ui-control ring-kumo-interact", className)} />;
+  return (
+    <KumoInputArea
+      {...props}
+      ref={ref}
+      data-control-error={Boolean(props.error) || props.variant === "error" || undefined}
+      className={classes("ui-control ring-kumo-interact", className)}
+    />
+  );
 });
 function ProductSelect<T, Multiple extends boolean | undefined = false>(
   props: Parameters<typeof KumoSelect<T, Multiple>>[0],
@@ -333,6 +346,7 @@ export function buttonClassName({
     buttonVariants({ variant: kumoButtonVariant(variant), size: size === "compact" ? "sm" : "base" }),
     "ui-button justify-center shadow-none",
     variant === "primary" && "ui-button--primary !text-(--on-primary)",
+    variant === "danger" && "ui-button--danger",
     (variant === "secondary" || variant === "outline") && "ui-button--secondary",
     size === "compact" && "ui-button--compact",
     variant === "primary" &&

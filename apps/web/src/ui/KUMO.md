@@ -42,8 +42,13 @@ existing product vocabulary to Kumo primitives:
 - `PageHeader` is the owned Kumo block in `src/components/kumo/page-header`.
   It uses the adapter’s semantic `Text` for semantic `h1` titles and secondary descriptions, and
   keeps page actions in the header row when tabs are not present.
+  Its `title-actions` layout places actions beside the title and gives the description a separate
+  full-width row; the default layout retains its bounded description and content-level alignment.
 - `Tabs`, `SettingsList`, and `SettingsRow` retain their semantic API while
   emitting Kumo tabs and semantic utility classes.
+- `Text` keeps document heading levels independent of visual size through `headingSize` (`page` or `section`).
+  These choices reuse the existing page and section tokens. For example, a Task detail keeps its
+  `h1` while using section typography; other callers retain their existing defaults.
 
 Use Kumo `Input`, `InputArea`, `Select`, `Checkbox`, `Switch`, `Table`,
 `LayerCard`, `Surface`, `Banner`, `Empty`, `Meter`, `Loader`, and `SkeletonLine`
@@ -63,7 +68,12 @@ expose Kumo-specific types or composition to callers.
 source; `pnpm theme:generate` produces `theme.css`. The repository check rejects stale output. `primitives.css`
 applies the shared Manrope hierarchy, control sizing, flat button fills, and surface radii through adapter classes.
 Primary actions use teal with charcoal labels; links use blue; selected rows use neutral grey with charcoal text.
-Focus uses slate. Success, warning, danger, and info retain independent semantic roles.
+Focus uses a single 2px contour at the existing control boundary, replacing the Kumo ring rather than
+stacking a separated outline on it. Inputs retain visible focus while editing; actions use keyboard
+focus-visible. Filled primary and danger actions use contrasting inset indicators. Invalid controls
+retain danger focus, and forced-colors mode uses the system highlight. The Soul editor follows the
+same boundary without changing its editing or save behavior. Success, warning, danger, and info
+retain independent semantic roles.
 Generic recessed, tint, table-row, disabled, and hover surfaces stay neutral; `--brand-soft` is reserved for explicit
 selected/current states. The button adapter assigns the same reviewed fill to Kumo's gradient endpoints and ring,
 removing the decorative treatment. Tests verify normal text, action fills, and meaningful control boundaries.

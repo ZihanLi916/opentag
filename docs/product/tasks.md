@@ -50,10 +50,9 @@ thread Session owns, and a delivery expired because a newer revision of its mess
 A message steered into a running Turn gets a small annotation on the input; it does not create a
 second Agent response or report.
 
-Execution summaries remain separate from sent replies. When captured replies exist, the summary is
-collapsed by default, and expanding it survives background refresh and pagination. Without captured
-replies the summary stays visible and labelled. Execution failures, unavailable or incomplete reply
-history, and truncated content remain visible even when the summary is collapsed.
+Execution summaries, when reported, remain visible as separate execution records in the conversation.
+They never substitute for captured sent replies. Execution failures, unavailable or incomplete reply
+history, and truncated content remain visible.
 
 Inbound attachments show their stored name, type, and any processing availability limitation. The
 Task API projects metadata from existing message resources, omitting provider resource keys. Older
@@ -86,6 +85,26 @@ chat's channel Session, overrides it.
 `PATCH /api/v1/sessions/:id` sets or clears the manual title. The id may be the Task id or one of
 its Sessions; the title is written to the Session the Task reads it from. A top-level group request
 that nobody replied to has no such Session and returns `404`.
+
+## Web presentation
+
+The Task list retains the shared page title. Task titles use 16px medium text; column headings use
+14px medium text, and source, Agent and activity-time values use 14px regular text. Long list titles
+remain one line on wide containers and at most two lines on narrow containers, with the full stored
+title available in the link's title attribute and on the detail page.
+
+The detail title remains the page's `h1` and uses the existing 20px, 600-weight section typography,
+with a 30px line height and natural wrapping. It displays the complete stored title without an
+additional clamp. Task facts retain their order in two, three or five columns according to the
+content container width. The start time spans both columns in the narrow layout so the complete
+date and time can wrap without squeezing the other facts.
+
+The conversation follows the facts without a visible Activity heading; its existing Activity heading
+remains available to assistive technology. Requests and sent replies use 16px text with a 24px line
+height. Authors use 14px semibold text and timestamps use 12px regular text. Execution summaries and
+operational notices stay at 14px, and code retains its existing monospace treatment. Wide code, native
+message payloads and message tables scroll locally, with named, keyboard-focusable regions. The conversation's
+768px reading width, message order, paging and scroll anchoring are unchanged.
 
 ## Cancelling a queued Task
 

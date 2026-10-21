@@ -21,10 +21,14 @@
 }
 .soul-editor:focus-visible {
   outline: 2px solid var(--color-kumo-focus);
-  outline-offset: 2px;
+  outline-offset: -1px;
 }
 .soul-editor[aria-disabled="true"] {
   opacity: 0.65;
+}
+.soul-editor[aria-readonly="true"] {
+  border-color: var(--border);
+  resize: none;
 }
 .soul-editor[data-empty="true"]::before {
   position: absolute;

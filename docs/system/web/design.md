@@ -27,6 +27,34 @@ The app strengthens supporting text to `#696c73` so it remains readable on selec
 Orange `#e5502e` is a warning indicator; warning body text uses `#a63f22`, and danger uses
 `#b42318`. Selection outlines and progress markers use the slate focus token; links use blue.
 
+Task screens use the existing application typography: the list retains the page-title scale,
+while an individual Task title keeps its `h1` semantics and uses the 20px section scale with
+30px line height. Conversation text uses 16px/24px; authors use 14px semibold and timestamps
+use 12px regular text. Execution summaries and operational notices remain at 14px. The Activity
+section heading remains accessible without adding a visible label above the conversation.
+List columns distinguish 16px medium task titles from 14px headings and supporting values.
+
+Usage keeps the period selector beside the title and lets the concise description use the
+available width, wrapping naturally on smaller screens. Daily UTC token totals use bars from
+a zero baseline, with no interpolation between days. Totals and charts show recorded usage;
+missing task reports remain explicit and do not imply zero actual usage. Agent totals combine
+local IM reports with recorded cloud model calls, so the description does not exclude all
+internal-session usage. The breakdown uses 16px medium quantities and 12px secondary percentages;
+the Tokens column supplies the unit. Cached input is a subset of input and is explained once
+below the table rather than repeated as an exclusion on the row.
+
+Overview keeps Usage and dependency status above Schedules, followed by the Agent-scoped Tasks list.
+The detail header presents the Agent identity without an availability or activity badge beside the name;
+dependency status and lifecycle notices remain in the page content.
+Schedules retain their card layout. Tasks preserve server paging and Load more; the full Tasks page
+remains available through View all. Long Agent names, handles, and Computer identities wrap within
+their available space rather than widening the page.
+
+Soul keeps the page subtitle and Browse templates action. Saved content uses the same white document frame
+and typography as editing, with a quiet Edit action below the document on the right. Editing exposes Cancel and
+Save changes in that position; no persistent edit hint or prominent header action is added. Success feedback
+briefly appears beside these actions, with its layout space retained when it disappears.
+
 ## Website reference sources
 
 | Source | Responsibility |
@@ -77,7 +105,7 @@ Partner and integration logos retain their identity and proportions. Vendor demo
 | Warning and error | `--warning` / `--destructive` | Orange-red `#e5502e`; retain separate semantic roles and descriptive labels/icons |
 | Footer surface | `--surface-footer` | Cool gray `#eef0f3` |
 | Table / FAQ borders | `--border-table` / `--border-subtle` | `#dce0e6` / `#e5e8ed` |
-| Keyboard focus | `--ring` | `#697586`; shared controls use a 2px outline with 3px offset |
+| Keyboard focus | `--ring` | `#697586`; shared controls use one 2px focus contour at the existing boundary, without a separated outer ring |
 | Comparison header | `--comparison-header` | Slack sidebar purple, `#894b94` |
 | Featured comparison cell | `--comparison-header-featured` | Slack topbar purple, `#6f3a82` |
 | Comparison header text | `--comparison-header-text` | White, `#ffffff` |
@@ -118,6 +146,8 @@ The 96/64px section rhythm also governs testimonials; the former 160/112px excep
 The marketing container is centred and capped at 1280px; comparison, testimonials, and FAQ use narrower content measures. Feature frames follow their content rather than preserving empty design-canvas space.
 
 Shared controls use a 40px default height, with 32px and 48px variants. Radius roles are 6, 10, 12, and 16px, with full rounding for circles. Standard controls use 10px corners; outer product cards use 16px. Keep existing illustration geometry and documented marketing exceptions intact rather than rounding SVG coordinates to the UI scale.
+
+In the expanded app sidebar, All Agents, the Agent switcher, navigation items, and the Account trigger share an icon column and text alignment. The Account trigger leaves space around its avatar inside the hover surface. Compact layouts keep the avatar centred and preserve touch targets. Repository dialogs align their title, description, filter, and list; the scrolling body leaves room for the filter's focus ring, and the footer follows the content without excess empty space.
 
 ## Page composition and artwork
 
