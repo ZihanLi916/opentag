@@ -429,7 +429,7 @@ export function TaskDetailPage({
          * or the Agent name measures.
          */}
         <div className="min-w-0 wrap-anywhere">
-          <Text as="h1" headingSize="section" variant="heading">
+          <Text as="h1" headingSize="body" variant="heading">
             {task.title}
           </Text>
         </div>
@@ -808,7 +808,7 @@ function TaskRow({
 
 function TaskTitleLink({ showExamples, task }: { showExamples: boolean; task: TaskSummary }) {
   const className =
-    "line-clamp-2 max-w-[40rem] wrap-anywhere text-base font-medium text-kumo-default hover:text-kumo-link @min-[40rem]/content:line-clamp-1";
+    "line-clamp-2 max-w-[40rem] wrap-anywhere text-sm font-normal text-kumo-default hover:text-kumo-link @min-[40rem]/content:line-clamp-1";
   if (showExamples) {
     return (
       <Link

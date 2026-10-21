@@ -46,9 +46,9 @@ existing product vocabulary to Kumo primitives:
   full-width row; the default layout retains its bounded description and content-level alignment.
 - `Tabs`, `SettingsList`, and `SettingsRow` retain their semantic API while
   emitting Kumo tabs and semantic utility classes.
-- `Text` keeps document heading levels independent of visual size through `headingSize` (`page` or `section`).
-  These choices reuse the existing page and section tokens. For example, a Task detail keeps its
-  `h1` while using section typography; other callers retain their existing defaults.
+- `Text` keeps document heading levels independent of visual size through `headingSize` (`page`, `section` or `body`).
+  These choices reuse existing page, section and body sizes. A Task detail keeps its `h1` while using
+  16px medium body typography; other callers retain their existing defaults.
 
 Use Kumo `Input`, `InputArea`, `Select`, `Checkbox`, `Switch`, `Table`,
 `LayerCard`, `Surface`, `Banner`, `Empty`, `Meter`, `Loader`, and `SkeletonLine`
@@ -68,15 +68,19 @@ expose Kumo-specific types or composition to callers.
 source; `pnpm theme:generate` produces `theme.css`. The repository check rejects stale output. `primitives.css`
 applies the shared Manrope hierarchy, control sizing, flat button fills, and surface radii through adapter classes.
 Primary actions use teal with charcoal labels; links use blue; selected rows use neutral grey with charcoal text.
-Focus uses a single 2px contour at the existing control boundary, replacing the Kumo ring rather than
-stacking a separated outline on it. Inputs retain visible focus while editing; actions use keyboard
-focus-visible. Filled primary and danger actions use contrasting inset indicators. Invalid controls
-retain danger focus, and forced-colors mode uses the system highlight. The Soul editor follows the
+Input, InputArea, Select and Soul share a 1px idle boundary using `--border-strong`, preserving the
+3:1 contrast contract. Pointer focus and an expanded Select use the slate focus token on that same
+1px boundary, without an additional ring or shadow. Keyboard navigation uses one 2px contour at the
+existing boundary. The App tracks pointer input and keyboard navigation, actions and shortcuts at
+the document level, including body-mounted popups; typing in a pointer-focused field does not thicken
+its border. Isolated components fall back to keyboard focus. Actions retain keyboard focus-visible.
+Filled primary and danger actions use contrasting inset indicators. Invalid controls retain danger focus,
+and forced-colors mode uses the system highlight. The Soul editor follows the
 same boundary without changing its editing or save behavior. Success, warning, danger, and info
 retain independent semantic roles.
 Generic recessed, tint, table-row, disabled, and hover surfaces stay neutral; `--brand-soft` is reserved for explicit
 selected/current states. The button adapter assigns the same reviewed fill to Kumo's gradient endpoints and ring,
-removing the decorative treatment. Tests verify normal text, action fills, and meaningful control boundaries.
+removing the decorative treatment. Tests verify normal text, action fills, active boundaries, and keyboard focus.
 
 The theme uses explicit `data-opentag-theme="opentag"` and `data-opentag-mode="light|dark"`
 attributes, set statically on `<html>` in `index.html`. The namespacing keeps third-party code
