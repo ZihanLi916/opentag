@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { githubConnections } from "../db/schema/index.js";
@@ -14,15 +13,10 @@ import {
   GITHUB_REFRESH_OUTCOME_UNKNOWN_ERROR_CODE,
   GitHubCredentialRefreshStore,
 } from "../services/github/github-refresh-store.js";
-import { GitHubWebhookService } from "../services/github/github-webhook.js";
 import { sha256Hex } from "../services/github/hashes.js";
 import {
   createAccount,
-  GITHUB_TEST_APP_ID,
-  installation,
-  installationsPage,
-  repositoriesPage,
-  repository,
+  GITHUB_TEST_CLIENT_ID,
   stubGitHubApi,
   testCredentialCipher,
   tokenMaterial,
@@ -51,8 +45,14 @@ beforeEach(async () => {
 function stores() {
   return {
     connections: new GitHubConnectionService(unit.database, { now: () => clock }),
-    refreshStore: new GitHubCredentialRefreshStore(unit.database, { now: () => clock }),
-    recheckStore: new GitHubConnectionRecheckStore(unit.database, { now: () => clock }),
+    refreshStore: new GitHubCredentialRefreshStore(unit.database, {
+      oauthClientId: "Ov23testclient",
+      now: () => clock,
+    }),
+    recheckStore: new GitHubConnectionRecheckStore(unit.database, {
+      oauthClientId: "Ov23testclient",
+      now: () => clock,
+    }),
   };
 }
 
@@ -118,7 +118,7 @@ async function activeConnection(
   const account = await createAccount(unit);
   const { connections } = stores();
   const { flow } = await connections.createConnection(account.id, {
-    appId: GITHUB_TEST_APP_ID,
+    oauthClientId: GITHUB_TEST_CLIENT_ID,
     loginSessionHash,
   });
   const accessToken = options.accessToken ?? "ghu_current";
@@ -186,7 +186,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     const { connectionId } = await activeConnection();
     const api = stubGitHubApi();
     api.refreshUserToken.mockResolvedValue(tokenMaterial({ accessToken: "ghu_next", refreshToken: "ghr_next" }));
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
+
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.refresh.completed).toBe(1);
@@ -196,12 +196,14 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     expect(row?.status).toBe("active");
     expect(row?.credentialGeneration).toBe(2n);
     expect(row?.refreshStatus).toBe("idle");
+    expect(api.validateOAuthToken).not.toHaveBeenCalled();
+    expect(api.getAuthenticatedUser).not.toHaveBeenCalled();
     const opened = cipher.decryptUserCredential(
       {
         connectionId,
         accountId: row?.accountId as string,
         githubHost: "github.com",
-        appId: GITHUB_TEST_APP_ID,
+        oauthClientId: GITHUB_TEST_CLIENT_ID,
         githubUserId: "42",
       },
       { ciphertext: row?.credentialCiphertext as string, keyId: row?.credentialKeyId as string },
@@ -211,6 +213,87 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     const second = await workerFor(api.asClient()).runTickOnce();
     expect(second.refresh.claimed).toBe(0);
   });
+
+  it.each([
+    ["rate limit", GITHUB_API_CLIENT_ERROR_CODES.RATE_LIMITED],
+    ["timeout or 5xx", GITHUB_API_CLIENT_ERROR_CODES.UPSTREAM_UNAVAILABLE],
+    ["malformed response", GITHUB_API_CLIENT_ERROR_CODES.RESPONSE_INVALID],
+  ])("retains the rotated pair after a recheck %s without replaying the refresh", async (_label, code) => {
+    const { connectionId } = await activeConnection();
+    await makeRecheckDue(connectionId);
+    const before = await rowOf(connectionId);
+    const api = stubGitHubApi();
+    api.refreshUserToken.mockResolvedValue(tokenMaterial({ accessToken: "ghu_next", refreshToken: "ghr_next" }));
+    api.getAuthenticatedUser.mockRejectedValueOnce(new GitHubApiClientError(code, "recheck failed"));
+    const worker = workerFor(api.asClient());
+
+    const result = await worker.runTickOnce();
+    expect(result.refresh).toMatchObject({ completed: 1, failed: 0, released: 0 });
+    expect(result.recheck).toMatchObject({ transient: 1, unauthorized: 0 });
+    const rotated = await rowOf(connectionId);
+    if (!rotated?.credentialCiphertext || !rotated.credentialKeyId) throw new Error("Missing rotated credential");
+    expect(rotated).toMatchObject({
+      status: "active",
+      credentialGeneration: 2n,
+      authorizationVersion: before?.authorizationVersion,
+      refreshStatus: "idle",
+      refreshAttemptId: null,
+      recheckRequired: true,
+    });
+    expect(
+      cipher.decryptUserCredential(
+        {
+          connectionId,
+          accountId: rotated.accountId,
+          githubHost: "github.com",
+          oauthClientId: GITHUB_TEST_CLIENT_ID,
+          githubUserId: "42",
+        },
+        { ciphertext: rotated.credentialCiphertext, keyId: rotated.credentialKeyId },
+      ),
+    ).toEqual({ accessToken: "ghu_next", refreshToken: "ghr_next" });
+    expect(api.getAuthenticatedUser).toHaveBeenCalledWith({ accessToken: "ghu_next" });
+
+    clock = new Date(clock.getTime() + 6 * 60_000);
+    const recovered = await worker.runTickOnce();
+    expect(recovered.refresh.claimed).toBe(0);
+    expect(recovered.recheck.healthy).toBe(1);
+    expect(await rowOf(connectionId)).toMatchObject({
+      credentialCiphertext: rotated?.credentialCiphertext,
+      credentialGeneration: 2n,
+      authorizationVersion: before?.authorizationVersion,
+      recheckRequired: false,
+    });
+    expect(api.refreshUserToken).toHaveBeenCalledExactlyOnceWith({ refreshToken: "ghr_current" });
+    expect(api.validateOAuthToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["identity mismatch", "revoked repo scope"])(
+    "invalidates a rotated pair on a definite %s",
+    async (failure) => {
+      const { connectionId } = await activeConnection();
+      await makeRecheckDue(connectionId);
+      const api = stubGitHubApi();
+      api.refreshUserToken.mockResolvedValue(tokenMaterial());
+      if (failure === "identity mismatch") api.getAuthenticatedUser.mockResolvedValue({ id: "999", login: "foreign" });
+      else
+        api.getAuthenticatedUser.mockRejectedValue(
+          new GitHubApiClientError(GITHUB_API_CLIENT_ERROR_CODES.CREDENTIAL_INVALID, "Missing repo scope"),
+        );
+      const worker = workerFor(api.asClient());
+
+      const result = await worker.runTickOnce();
+      expect(result.refresh.completed).toBe(1);
+      expect(result.recheck.unauthorized).toBe(1);
+      expect(await rowOf(connectionId)).toMatchObject({
+        status: "reauthorization_required",
+        credentialCiphertext: null,
+      });
+      expect((await worker.runTickOnce()).refresh.claimed).toBe(0);
+      expect(api.refreshUserToken).toHaveBeenCalledTimes(1);
+      expect(api.validateOAuthToken).not.toHaveBeenCalled();
+    },
+  );
 
   it("marks reauthorization on a definitive rejection and never replays the grant", async () => {
     const { connectionId } = await activeConnection();
@@ -277,7 +360,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
         connectionId: crypto.randomUUID(),
         accountId,
         githubHost: "github.com",
-        appId: GITHUB_TEST_APP_ID,
+        oauthClientId: GITHUB_TEST_CLIENT_ID,
         githubUserId: "42",
       },
       { accessToken: "ghu_current", refreshToken: "ghr_current" },
@@ -304,7 +387,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
         connectionId,
         accountId,
         githubHost: "github.com",
-        appId: GITHUB_TEST_APP_ID,
+        oauthClientId: GITHUB_TEST_CLIENT_ID,
         githubUserId: "42",
       },
       { accessToken: "ghu_current", refreshToken: "ghr_current" },
@@ -315,7 +398,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
       .where(eq(githubConnections.id, connectionId));
     api.refreshUserToken.mockResolvedValue(tokenMaterial({ accessToken: "ghu_next", refreshToken: "ghr_next" }));
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
+
     const second = await workerFor(api.asClient()).runTickOnce();
     expect(second.refresh.completed).toBe(1);
   });
@@ -330,7 +413,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     const api = stubGitHubApi();
     api.refreshUserToken.mockResolvedValue(tokenMaterial({ accessToken: "ghu_next", refreshToken: "ghr_next" }));
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
+
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.refresh.completed).toBe(1);
     // The tick's recheck pass fenced after the rotation and verified the new pair healthy.
@@ -357,7 +440,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
         connectionId,
         accountId,
         githubHost: "github.com",
-        appId: GITHUB_TEST_APP_ID,
+        oauthClientId: GITHUB_TEST_CLIENT_ID,
         githubUserId: "42",
       },
       { ciphertext: row?.credentialCiphertext as string, keyId: row?.credentialKeyId as string },
@@ -374,7 +457,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     const account = await createAccount(unit);
     const { connections } = stores();
     const { flow } = await connections.createConnection(account.id, {
-      appId: GITHUB_TEST_APP_ID,
+      oauthClientId: GITHUB_TEST_CLIENT_ID,
       loginSessionHash,
     });
     const claimed = await connections.claimOAuthCallback({ stateHash: sha256Hex(flow.state), loginSessionHash });
@@ -405,7 +488,7 @@ describe("GitHubMaintenanceWorker refresh pass", () => {
     const api = stubGitHubApi();
     api.refreshUserToken.mockResolvedValue(tokenMaterial({ accessToken: "ghu_rotated" }));
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
+
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.refresh.completed).toBe(1);
     // The flow proof is still bound: the callback completes with the original verifier.
@@ -450,8 +533,7 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
     await makeRecheckDue(connectionId);
     const api = stubGitHubApi();
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    api.listUserInstallations.mockResolvedValue(installationsPage([installation()]));
-    api.listInstallationRepositories.mockResolvedValue(repositoriesPage([repository()]));
+
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.recheck.healthy).toBe(1);
     const row = await rowOf(connectionId);
@@ -470,61 +552,18 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
     const before = await rowOf(connectionId);
     const api = stubGitHubApi();
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    api.listUserInstallations.mockResolvedValue(installationsPage([installation()]));
+
     // Rights are checked per operation; the connection worker checks credential identity only.
-    api.listInstallationRepositories.mockResolvedValue(
-      repositoriesPage([repository({ permissions: { admin: false, pull: true, push: false } })]),
-    );
+
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.recheck.healthy).toBe(1);
-    expect(api.listUserInstallations).not.toHaveBeenCalled();
-    expect(api.listInstallationRepositories).not.toHaveBeenCalled();
+
     const row = await rowOf(connectionId);
     expect(row?.status).toBe("active");
     expect(row?.authorizationVersion).toBe(before?.authorizationVersion);
     expect(row?.recheckRequired).toBe(false);
     expect(row?.lastErrorCode).toBeNull();
     expect(row?.credentialCiphertext).toBeTruthy();
-  });
-
-  it("rechecks connections for installation events without using a stored repository directory", async () => {
-    const agentId = "1a63a21e-f6c7-4474-91ea-4dabf0566a24";
-    const { connectionId } = await activeConnection({
-      bindings: [binding(agentId)],
-      accessExpiresInMs: 8 * 3_600_000,
-    });
-    const before = await rowOf(connectionId);
-    const { recheckStore } = stores();
-    const webhook = new GitHubWebhookService({ webhookSecret: "webhook-secret", recheckStore, now: () => clock });
-    const payload = Buffer.from(JSON.stringify({ action: "deleted", installation: { id: 55123456 } }), "utf8");
-    const verdict = await webhook.handle({
-      rawBody: payload,
-      signature256: `sha256=${createHmac("sha256", "webhook-secret").update(payload).digest("hex")}`,
-      event: "installation",
-      deliveryId: "delivery-installation-deleted",
-    });
-    expect(verdict).toMatchObject({ status: "processed", recheckMarkedConnections: 1 });
-
-    // Installation events schedule a connection check. Per-target admission independently rejects removed repositories.
-    const marked = await rowOf(connectionId);
-    expect(marked?.authorizationVersion).toBe(before?.authorizationVersion);
-    expect(marked?.recheckRequired).toBe(true);
-
-    const api = stubGitHubApi();
-    api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
-    // The installation is gone, so the connected user can no longer reach any repository through it.
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
-    const summary = await workerFor(api.asClient()).runTickOnce();
-    expect(summary.recheck.healthy).toBe(1);
-    expect(api.listUserInstallations).not.toHaveBeenCalled();
-    expect(api.listInstallationRepositories).not.toHaveBeenCalled();
-
-    const row = await rowOf(connectionId);
-    expect(row?.status).toBe("active");
-    expect(row?.authorizationVersion).toBe(before?.authorizationVersion);
-    expect(row?.recheckRequired).toBe(false);
-    expect(row?.lastErrorCode).toBeNull();
-    expect(row?.credentialCiphertext).toBe(before?.credentialCiphertext);
   });
 
   it("invalidates fail-closed when the credential is dead upstream", async () => {
@@ -574,13 +613,13 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
           )
         : Promise.resolve({ id: "42", login: "octocat" }),
     );
-    api.listUserInstallations.mockResolvedValue(installationsPage([]));
+
     const summary = await workerFor(api.asClient(), { batchLimit: 1 }).runTickOnce();
     expect(summary.refresh.completed).toBe(1);
     expect(summary.recheck.transient).toBe(1);
     expect(summary.recheck.unauthorized).toBe(0);
     // The deferred recheck never presented the expired token to GitHub.
-    expect(api.getAuthenticatedUser).not.toHaveBeenCalled();
+    expect(api.getAuthenticatedUser).not.toHaveBeenCalledWith(expect.objectContaining({ accessToken: "ghu_current" }));
     const deferred = await rowOf(second.connectionId);
     expect(deferred?.status).toBe("active");
     expect(deferred?.credentialCiphertext).toBe(secondBefore?.credentialCiphertext);
@@ -600,7 +639,7 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
         connectionId: second.connectionId,
         accountId: recovered?.accountId as string,
         githubHost: "github.com",
-        appId: GITHUB_TEST_APP_ID,
+        oauthClientId: GITHUB_TEST_CLIENT_ID,
         githubUserId: "42",
       },
       { ciphertext: recovered?.credentialCiphertext as string, keyId: recovered?.credentialKeyId as string },
@@ -631,7 +670,8 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
 
     const api = stubGitHubApi();
     api.refreshUserToken.mockResolvedValue(tokenMaterial());
-    api.getAuthenticatedUser.mockImplementation(() => {
+    api.getAuthenticatedUser.mockImplementation(({ accessToken }: { accessToken: string }) => {
+      if (accessToken !== "ghu_current") return Promise.resolve({ id: "42", login: "octocat" });
       // The credential check is slow: the rejection arrives after the presented token expired.
       clock = new Date(clock.getTime() + 10 * 60_000);
       return Promise.reject(
@@ -683,10 +723,18 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
     const { recheckStore } = stores();
     const [due] = await recheckStore.listDueForRecheck({ limit: 10 });
     if (!due) throw new Error("expected a due connection");
-    await recheckStore.invalidateActiveConnections({
-      connectionIds: [connectionId],
-      errorCode: "GITHUB_CREDENTIAL_INVALID",
-    });
+    await unit.database
+      .update(githubConnections)
+      .set({
+        status: "reauthorization_required",
+        authorizationVersion: 99n,
+        credentialCiphertext: null,
+        credentialKeyId: null,
+        accessExpiresAt: null,
+        refreshExpiresAt: null,
+        nextRecheckAt: null,
+      })
+      .where(eq(githubConnections.id, connectionId));
     const committed = await recheckStore.commitRecheckResult({
       connectionId,
       expectedAuthorizationVersion: due.authorizationVersion,
@@ -704,13 +752,15 @@ describe("GitHubMaintenanceWorker recheck pass", () => {
     // The flow was begun ten minutes ago and has now expired.
     const stale = new Date(clock.getTime() - 11 * 60_000);
     await new GitHubConnectionService(unit.database, { now: () => stale }).createConnection(account.id, {
-      appId: GITHUB_TEST_APP_ID,
+      oauthClientId: GITHUB_TEST_CLIENT_ID,
       loginSessionHash,
     });
     const swept = await recheckStore.sweepExpiredOAuthFlows({ limit: 100 });
-    expect(swept.deletedPending).toBe(1);
+    expect(swept.clearedFlows).toBe(1);
     const rows = await unit.database.select().from(githubConnections);
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.oauthContext).toBeNull();
+    expect(rows[0]?.status).toBe("pending");
   });
 });
 
@@ -741,9 +791,8 @@ describe("GitHubMaintenanceWorker tick scheduling", () => {
       .mockRejectedValueOnce(new TypeError("database is gone"))
       .mockResolvedValueOnce({
         sweptFlows: 0,
-        deletedPending: 0,
         refresh: { claimed: 0, completed: 0, failed: 0, released: 0, skipped: 0 },
-        recheck: { scanned: 0, healthy: 0, permissionRevoked: 0, unauthorized: 0, transient: 0 },
+        recheck: { scanned: 0, healthy: 0, unauthorized: 0, transient: 0 },
       });
     worker.start();
     await vi.waitFor(() => expect(failures).toHaveLength(1), { timeout: 2_000 });
@@ -794,9 +843,8 @@ describe("GitHubMaintenanceWorker guards and defaults", () => {
     // Defaults are live: a fresh construction still performs a real bounded pass.
     await expect(worker.runTickOnce()).resolves.toEqual({
       sweptFlows: 0,
-      deletedPending: 0,
       refresh: { claimed: 0, completed: 0, failed: 0, released: 0, skipped: 0 },
-      recheck: { scanned: 0, healthy: 0, permissionRevoked: 0, unauthorized: 0, transient: 0 },
+      recheck: { scanned: 0, healthy: 0, unauthorized: 0, transient: 0 },
     });
   });
 
@@ -828,9 +876,8 @@ describe("GitHubMaintenanceWorker guards and defaults", () => {
       await gate;
       return {
         sweptFlows: 0,
-        deletedPending: 0,
         refresh: { claimed: 0, completed: 0, failed: 0, released: 0, skipped: 0 },
-        recheck: { scanned: 0, healthy: 0, permissionRevoked: 0, unauthorized: 0, transient: 0 },
+        recheck: { scanned: 0, healthy: 0, unauthorized: 0, transient: 0 },
       };
     });
     worker.start();
@@ -1040,10 +1087,18 @@ describe("GitHubMaintenanceWorker recheck verdicts", () => {
     const commit = recheckStore.commitRecheckResult.bind(recheckStore);
     // A concurrent invalidation bumps the authorization version before the commit lands.
     vi.spyOn(recheckStore, "commitRecheckResult").mockImplementation(async (input) => {
-      await recheckStore.invalidateActiveConnections({
-        connectionIds: [input.connectionId],
-        errorCode: "GITHUB_CREDENTIAL_INVALID",
-      });
+      await unit.database
+        .update(githubConnections)
+        .set({
+          status: "reauthorization_required",
+          authorizationVersion: 99n,
+          credentialCiphertext: null,
+          credentialKeyId: null,
+          accessExpiresAt: null,
+          refreshExpiresAt: null,
+          nextRecheckAt: null,
+        })
+        .where(eq(githubConnections.id, input.connectionId));
       return commit(input);
     });
     const summary = await worker.runTickOnce();
@@ -1059,7 +1114,6 @@ describe("GitHubMaintenanceWorker recheck verdicts", () => {
     api.getAuthenticatedUser.mockResolvedValue({ id: "42", login: "octocat" });
     const summary = await workerFor(api.asClient()).runTickOnce();
     expect(summary.recheck.healthy).toBe(1);
-    expect(api.listUserInstallations).not.toHaveBeenCalled();
   });
 });
 
@@ -1102,7 +1156,7 @@ describe("GitHubMaintenanceWorker refresh failure classification", () => {
     const api = stubGitHubApi();
     const summary = await workerFor(api.asClient()).runTickOnce();
     // The host is rejected before anything is presented to GitHub, so the claim is released intact.
-    expect(summary.refresh.released).toBe(1);
+    expect(summary.refresh.claimed).toBe(0);
     expect(api.refreshUserToken).not.toHaveBeenCalled();
     const row = await rowOf(connectionId);
     expect(row?.status).toBe("active");

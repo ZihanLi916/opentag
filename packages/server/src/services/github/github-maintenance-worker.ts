@@ -13,16 +13,15 @@
  * must never be replayed. A local credential-envelope failure is different again: nothing was ever
  * sent to GitHub, so the claim releases untouched and the still-valid credential survives for a
  * later retry — a local integrity problem must never masquerade as a provider verdict.
- * Recheck semantics: /user proves the credential and identity, then live admission re-verifies
- * every current binding; revoked permissions bump the authorization version (issued runtime access
- * dies) while the row stays active for reconfiguration, and a dead credential invalidates
- * fail-closed. A recheck that finds the access token already expired defers with a transient
+ * Successful refreshes persist the rotated pair before any independent recheck. Rechecks use
+ * /user with the user token to prove identity and the repo scope. Transient recheck failures retain
+ * the credential; a dead credential or missing scope invalidates fail-closed. A recheck that finds
+ * the access token already expired defers with a transient
  * outcome instead: the refresh pass owns expiry recovery, and the expected 401 must never clear a
  * refresh credential that routine maintenance can still recover.
  */
 
 import type { GitHubCredentialCipher } from "../github-credential-material.js";
-import { GitHubConnectionServiceError } from "./errors.js";
 import { GITHUB_API_CLIENT_ERROR_CODES, type GitHubApiClient, GitHubApiClientError } from "./github-api-client.js";
 import type {
   GitHubActiveConnectionSnapshot,
@@ -57,9 +56,8 @@ export interface GitHubMaintenanceWorkerOptions {
 
 export interface GitHubMaintenanceTickSummary {
   sweptFlows: number;
-  deletedPending: number;
   refresh: { claimed: number; completed: number; failed: number; released: number; skipped: number };
-  recheck: { scanned: number; healthy: number; permissionRevoked: number; unauthorized: number; transient: number };
+  recheck: { scanned: number; healthy: number; unauthorized: number; transient: number };
 }
 
 /** One recheck load: either the fenced snapshot to verify, or the verdict that ended it early. */
@@ -72,7 +70,6 @@ const DEFAULT_TICK_BUDGET_MS = 45_000;
 const DEFAULT_BATCH_LIMIT = 25;
 const DEFAULT_REFRESH_WITHIN_MS = 3_600_000;
 const GITHUB_CREDENTIAL_INVALID_CODE = "GITHUB_CREDENTIAL_INVALID";
-const GITHUB_PERMISSION_REVOKED_CODE = "GITHUB_PERMISSION_REVOKED";
 const GITHUB_IDENTITY_MISMATCH_CODE = "GITHUB_IDENTITY_MISMATCH";
 const GITHUB_RATE_LIMITED_CODE = "GITHUB_RATE_LIMITED";
 const GITHUB_UPSTREAM_UNAVAILABLE_CODE = "GITHUB_UPSTREAM_UNAVAILABLE";
@@ -165,13 +162,11 @@ export class GitHubMaintenanceWorker {
     const deadline = this.#now().getTime() + this.#tickBudgetMs;
     const summary: GitHubMaintenanceTickSummary = {
       sweptFlows: 0,
-      deletedPending: 0,
       refresh: { claimed: 0, completed: 0, failed: 0, released: 0, skipped: 0 },
-      recheck: { scanned: 0, healthy: 0, permissionRevoked: 0, unauthorized: 0, transient: 0 },
+      recheck: { scanned: 0, healthy: 0, unauthorized: 0, transient: 0 },
     };
     const swept = await this.#recheckStore.sweepExpiredOAuthFlows({ limit: 100 });
     summary.sweptFlows = swept.clearedFlows;
-    summary.deletedPending = swept.deletedPending;
 
     const candidates = await this.#refreshStore.listRefreshDue({
       withinMs: this.#refreshWithinMs,
@@ -278,7 +273,6 @@ export class GitHubMaintenanceWorker {
       return;
     }
     if (outcome.kind === "healthy") summary.healthy += 1;
-    else if (outcome.kind === "permission_revoked") summary.permissionRevoked += 1;
     else if (outcome.kind === "unauthorized") summary.unauthorized += 1;
     else summary.transient += 1;
   }
@@ -288,7 +282,7 @@ export class GitHubMaintenanceWorker {
     if (loaded.kind === "outcome") return loaded.outcome;
     const accessToken = this.#openAccessToken(loaded.active);
     if (accessToken === null) return { kind: "transient_failure", errorCode: GITHUB_UPSTREAM_ERROR_CODE };
-    return this.#verifyAdmission(loaded.active, accessToken);
+    return this.#verifyCredential(loaded.active, accessToken);
   }
 
   /** Reads the fenced snapshot; a missing or unreadable row is already a verdict, not a throw. */
@@ -312,7 +306,7 @@ export class GitHubMaintenanceWorker {
           connectionId: snapshot.connectionId,
           accountId: snapshot.accountId,
           githubHost: "github.com",
-          appId: snapshot.appId,
+          oauthClientId: snapshot.oauthClientId,
           githubUserId: snapshot.githubUserId,
         },
         snapshot.credential,
@@ -322,7 +316,10 @@ export class GitHubMaintenanceWorker {
     }
   }
 
-  async #verifyAdmission(snapshot: GitHubActiveConnectionSnapshot, accessToken: string): Promise<GitHubRecheckOutcome> {
+  async #verifyCredential(
+    snapshot: GitHubActiveConnectionSnapshot,
+    accessToken: string,
+  ): Promise<GitHubRecheckOutcome> {
     if (snapshot.accessExpiresAt.getTime() <= this.#now().getTime()) {
       // The access token is expired: /user would return the 401 the refresh pass is there to
       // recover from. Defer with a transient outcome instead of clearing a refresh credential
@@ -337,7 +334,7 @@ export class GitHubMaintenanceWorker {
       }
       return { kind: "healthy" };
     } catch (error) {
-      // The token was live when the snapshot was taken but expired while /user or admission was
+      // The token was live when the snapshot was taken but expired while /user was
       // awaited: a 401 arriving at or after the expiry proves nothing about the credential — the
       // refresh pass owns expiry recovery, so defer instead of clearing a recoverable pair.
       if (
@@ -369,7 +366,7 @@ function bindingOf(claim: ClaimedGitHubRefresh) {
     connectionId: claim.connectionId,
     accountId: claim.accountId,
     githubHost: "github.com" as const,
-    appId: claim.appId,
+    oauthClientId: claim.oauthClientId,
     githubUserId: claim.githubUserId,
   };
 }
@@ -386,9 +383,6 @@ function refreshFailureCode(error: unknown): string {
 
 /** Maps one verification failure to the recheck verdict the store commits. */
 function classifyRecheckFailure(error: unknown): GitHubRecheckOutcome {
-  if (error instanceof GitHubConnectionServiceError) {
-    return { kind: "permission_revoked", errorCode: GITHUB_PERMISSION_REVOKED_CODE };
-  }
   if (error instanceof GitHubApiClientError) {
     if (error.code === GITHUB_API_CLIENT_ERROR_CODES.CREDENTIAL_INVALID) {
       return { kind: "unauthorized", errorCode: GITHUB_CREDENTIAL_INVALID_CODE };
