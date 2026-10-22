@@ -85,9 +85,16 @@ that disconnecting a live connection emits, because no credential was ever issue
 
 `active` bindings are exempt: the release matches only rows with no `activated_at` and no issued
 credential, so a reauthorization attempt that ends terminal keeps the working connection, its
-credential and its generation. A row that a crash or an older binary left enabled with a terminal
-`setup_state` is still hidden from the current-binding reads, so the read projection and the slot
-release can never disagree about what is connected.
+credential and its generation.
+
+Rows a previous binary left in that shape are reconciled too, in two places. The
+`0066_release_terminal_setup_slots` migration applies the same release to every existing
+`provisioning` row whose setup state is already terminal, so an upgraded deployment needs no
+operator action for an Agent that issue #504 already stranded. A row an older binary writes *after*
+the migration ran is released by the next writer that needs the slot: the Slack configuration
+transaction releases it under the lock it already holds, before its own insert. The current-binding
+read guard (`currentBindingOf`) remains the belt-and-braces answer for both, and Slack's
+configuration reads use it, so such a row never reports `IM_BINDING_UNBIND_REQUIRED`.
 
 A candidate is retained for a fixed 30 days, independently of QR expiry. Repeated checks
 do not extend this deadline. The retention is not a deployment setting; only tests inject a
