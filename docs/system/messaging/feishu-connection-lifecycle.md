@@ -75,13 +75,13 @@ A recoverable result returns it to `pending_activation`; a successful activation
 result clears temporary credential material. Cancel, disable and expiry also clear it.
 
 A terminal attempt leaves its `setup_state` on the row. The row is retained and reused by the next
-attempt, but it is not a connection: an `im_bindings` read reports a `provisioning` binding only
-while its attempt is `awaiting_user`, `validating` or `pending_activation`, and reports no binding
-at all once a first-time attempt ends `canceled`, `expired` or `failed`. That projection is the
-Server's single answer for Settings, the CLI and the HTTP binding and handoff routes, so a canceled
-connect leaves the Agent disconnected everywhere and both channel choices available again. The same
-terminal state on an `active` binding changes nothing: canceling a reauthorization keeps reporting
-the working connection.
+attempt, but it is not a connection: the current-binding read keeps reporting a `provisioning` row
+while its attempt is `awaiting_user`, `validating` or `pending_activation`, stops reporting it once a
+first-time attempt ends `canceled`, `expired` or `failed`, and reports a row that carries no setup
+attempt at all as it stands. That projection is the Server's single answer for Settings, the CLI and
+the HTTP binding and handoff routes, so a canceled connect leaves the Agent disconnected everywhere
+and both channel choices available again. The same terminal state on an `active` binding changes
+nothing: canceling a reauthorization keeps reporting the working connection.
 
 A candidate is retained for a fixed 30 days, independently of QR expiry. Repeated checks
 do not extend this deadline. The retention is not a deployment setting; only tests inject a
