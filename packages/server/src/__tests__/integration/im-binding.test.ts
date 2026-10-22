@@ -7123,9 +7123,9 @@ describe("IM binding persistence", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(activateAtomicAttempt).not.toHaveBeenCalled();
-      await expect(value.imBindingService.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
-        bindingState: "provisioning",
-      });
+      // The cancellation is the terminal outcome for a first-time attempt, so nothing is connected:
+      // the retained row is only the slot the next attempt reuses.
+      await expect(value.imBindingService.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
     } finally {
       await value.sql.end();
     }
