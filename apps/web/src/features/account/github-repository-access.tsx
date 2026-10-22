@@ -2,7 +2,7 @@ import type { GitHubConnectionStatus } from "@opentag/shared/browser";
 import { ArrowClockwise, ArrowUpRight, Question } from "@phosphor-icons/react";
 import { type RefObject, useRef, useState } from "react";
 import * as m from "../../paraglide/messages.js";
-import { Button, Dialog, KumoInputControl, Loader, Popover, SettingsRow, Text } from "../../ui/design-system.js";
+import { Button, Dialog, KumoInputControl, Loader, Popover, Text } from "../../ui/design-system.js";
 import { catalogHasMore, catalogIsPartial, type RepositoryCatalog } from "./github-repository-discovery.js";
 import { useGitHubRepositories } from "./use-github-repositories.js";
 import "./github-repository-access.css";
@@ -22,7 +22,15 @@ function GitHubConfigurationLink({ onClick }: { onClick?: () => void }) {
   );
 }
 
-export function GitHubRepositoryHelp({ scope = false }: { scope?: boolean }) {
+export function GitHubRepositoryHelp({
+  scope = false,
+  hasConnection = false,
+  onConfigure,
+}: {
+  scope?: boolean;
+  hasConnection?: boolean;
+  onConfigure?: () => void;
+}) {
   const label = scope ? m.integrations_github_repositories_help_label() : m.integrations_github_repository_help_label();
   return (
     <Popover>
@@ -42,6 +50,12 @@ export function GitHubRepositoryHelp({ scope = false }: { scope?: boolean }) {
               ? m.integrations_github_repositories_operations()
               : m.integrations_github_repository_help_organization()}
           </Text>
+          {!scope && hasConnection ? (
+            <Text as="p" variant="secondary">
+              {m.integrations_github_remove_scope()}
+            </Text>
+          ) : null}
+          <GitHubConfigurationLink onClick={onConfigure} />
         </Popover.Description>
       </Popover.Content>
     </Popover>
@@ -59,41 +73,19 @@ export function GitHubRepositoryAccess({
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const available = connection?.status === "active";
-  const description = available
-    ? m.integrations_github_repository_access_description()
-    : connection
-      ? m.integrations_github_repositories_reauthorize()
-      : undefined;
+  if (connection?.status !== "active") return null;
   return (
     <>
-      <SettingsRow
-        label={
-          <span className="inline-flex items-center gap-1">
-            {m.integrations_github_repository_access()}
-            <GitHubRepositoryHelp />
-          </span>
-        }
-        description={description}
-      >
-        <div className="github-repository-actions">
-          {available ? (
-            <Button ref={trigger} variant="secondary" disabled={busy} onClick={() => setOpen(true)}>
-              {m.integrations_github_repositories_view()}
-            </Button>
-          ) : null}
-          <GitHubConfigurationLink />
-        </div>
-      </SettingsRow>
-      {available && connection ? (
-        <GitHubRepositoryDialog
-          connection={connection}
-          open={open}
-          onClose={() => setOpen(false)}
-          returnFocusRef={trigger}
-          onConnectionInvalid={onConnectionInvalid}
-        />
-      ) : null}
+      <Button ref={trigger} variant="ghost" size="compact" disabled={busy} onClick={() => setOpen(true)}>
+        {m.integrations_github_repositories_view()}
+      </Button>
+      <GitHubRepositoryDialog
+        connection={connection}
+        open={open}
+        onClose={() => setOpen(false)}
+        returnFocusRef={trigger}
+        onConnectionInvalid={onConnectionInvalid}
+      />
     </>
   );
 }
@@ -134,7 +126,7 @@ function GitHubRepositoryDialog({
       description={hasRows ? m.integrations_github_repositories_description() : undefined}
       headerActions={
         <>
-          <GitHubRepositoryHelp scope />
+          <GitHubRepositoryHelp scope onConfigure={state.configure} />
           <Button
             variant="ghost"
             shape="square"
@@ -182,9 +174,6 @@ function GitHubRepositoryDialog({
           </div>
         ) : null}
       </div>
-      <footer className="github-repositories-footer">
-        <GitHubConfigurationLink onClick={state.configure} />
-      </footer>
     </Dialog>
   );
 }

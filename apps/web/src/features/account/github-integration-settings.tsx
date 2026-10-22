@@ -10,7 +10,7 @@ import {
   readGitHubOAuthOutcome,
 } from "../integrations/github-oauth-outcome.js";
 
-import { GitHubRepositoryAccess } from "./github-repository-access.js";
+import { GitHubRepositoryAccess, GitHubRepositoryHelp } from "./github-repository-access.js";
 import { clearProfileNavigationDraft } from "./profile-navigation-draft.js";
 
 type GitHubAuthorizationIntent = "create" | "reauthorize" | "replace";
@@ -168,9 +168,12 @@ export function GitHubIntegrationSettings({ beforeAuthorize }: { beforeAuthorize
   return (
     <section ref={sectionRef} className="grid gap-4" aria-labelledby="account-github-title" data-ui="account-github">
       <div className="grid gap-1">
-        <Text as="h2" id="account-github-title" variant="heading">
-          {m.integrations_github_account_title()}
-        </Text>
+        <div className="flex items-center gap-1">
+          <Text as="h2" id="account-github-title" variant="heading">
+            {m.integrations_github_account_title()}
+          </Text>
+          <GitHubRepositoryHelp hasConnection={Boolean(connection)} />
+        </div>
         <Text as="p" variant="secondary">
           {m.integrations_github_account_description()}
         </Text>
@@ -260,7 +263,7 @@ function GitHubRemovalConfirmation({
   onRemove: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const removeLabel = busy ? m.integrations_github_removing() : m.integrations_github_remove_account();
+  const removeLabel = busy ? m.integrations_github_removing() : m.integrations_github_remove();
   return (
     <Dialog
       open={open}
@@ -289,7 +292,7 @@ function GitHubRemovalConfirmation({
           <Button
             disabled={busy}
             aria-busy={busy}
-            aria-label={removeLabel}
+            aria-label={busy ? m.integrations_github_removing() : m.integrations_github_remove_account()}
             icon={
               busy ? (
                 <span className="inline-flex" aria-hidden="true">
@@ -297,6 +300,7 @@ function GitHubRemovalConfirmation({
                 </span>
               ) : undefined
             }
+            className="max-w-full"
             variant="danger"
             onClick={onRemove}
           >
@@ -324,16 +328,15 @@ function GitHubAuthorizationButton({
     intent === "create"
       ? m.integrations_github_add_account()
       : intent === "replace"
-        ? m.integrations_github_change()
+        ? m.integrations_github_change_account()
         : m.integrations_github_reauthorize();
-  const accessibleLabel = intent === "replace" ? m.integrations_github_change_account() : label;
   return (
     <Button
       data-ui="github-account-authorize"
       disabled={action !== null}
       size={intent === "create" ? undefined : "compact"}
       variant={intent === "replace" ? "ghost" : "primary"}
-      aria-label={active ? busyLabel : accessibleLabel}
+      aria-label={active ? busyLabel : label}
       aria-busy={active}
       aria-describedby={intent === "reauthorize" ? "account-github-reauthorize-description" : undefined}
       icon={
@@ -358,6 +361,7 @@ function GitHubAccountIdentity({
   removeRef,
   onAuthorize,
   onRemove,
+  onConnectionInvalid,
 }: {
   connection: GitHubConnectionStatus;
   action: GitHubAction | null;
@@ -365,6 +369,7 @@ function GitHubAccountIdentity({
   removeRef: RefObject<HTMLButtonElement | null>;
   onAuthorize: (intent: GitHubAuthorizationIntent) => void;
   onRemove: () => void;
+  onConnectionInvalid: (signal: AbortSignal) => Promise<void>;
 }) {
   const reauthorizationRequired = connection.status === "reauthorization_required";
   return (
@@ -374,6 +379,12 @@ function GitHubAccountIdentity({
           <span className="min-w-0 break-all text-sm font-medium text-kumo-strong">
             {githubAccountLabel(connection)}
           </span>
+          <GitHubRepositoryAccess
+            key={`${connection.id}/${connection.authorizationVersion}/${connection.status}`}
+            connection={connection}
+            busy={action !== null}
+            onConnectionInvalid={onConnectionInvalid}
+          />
           {reauthorizationRequired ? (
             <GitHubAuthorizationButton
               intent="reauthorize"
@@ -383,10 +394,11 @@ function GitHubAccountIdentity({
             />
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <GitHubAuthorizationButton intent="replace" action={action} busyLabel={busyLabel} onAuthorize={onAuthorize} />
           <Button
             ref={removeRef}
+            className="max-w-full"
             disabled={action !== null}
             variant="ghost"
             size="compact"
@@ -475,6 +487,7 @@ function AccountGitHubBody({
             removeRef={removeRef}
             onAuthorize={onAuthorize}
             onRemove={onRemove}
+            onConnectionInvalid={onConnectionInvalid}
           />
         </div>
       ) : (
@@ -482,12 +495,6 @@ function AccountGitHubBody({
           <GitHubAuthorizationButton intent="create" action={action} busyLabel={busyLabel} onAuthorize={onAuthorize} />
         </SettingsRow>
       )}
-      <GitHubRepositoryAccess
-        key={connection ? `${connection.id}/${connection.authorizationVersion}/${connection.status}` : "empty"}
-        connection={connection}
-        busy={busy}
-        onConnectionInvalid={onConnectionInvalid}
-      />
     </SettingsList>
   );
 }
