@@ -256,10 +256,10 @@ describe("FeishuSetupService persistence", () => {
     expect(diagnostic).not.toHaveBeenCalled();
   });
 
-  it("reads back as no connection after a canceled first attempt and reuses the slot for a second one", async () => {
+  it("releases the slot of a canceled first attempt and admits a second one on a fresh row", async () => {
     const value = await setupFixture();
     const gateway: FeishuRegistrationGateway = {
-      // Neither registration finishes authorizing: the Account cancels the first and restarts later.
+      // No registration finishes authorizing: the Account cancels the first and starts a second one.
       // The QR starts now so it is still open when the Account cancels it.
       start: vi.fn(() => registration(new Promise<never>(() => undefined), new Date())),
     };
@@ -278,16 +278,110 @@ describe("FeishuSetupService persistence", () => {
       });
       await expect(service.cancel(value.bootstrap.userId, first.id)).resolves.toMatchObject({ state: "canceled" });
 
-      // The canceled attempt never activated, so the Agent has no connected channel.
+      // The canceled attempt never activated, so the Agent has no connected channel...
       await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
       await expect(
         value.imBindings.getHandoffForAgent(value.bootstrap.userId, value.agent.id),
       ).resolves.toBeUndefined();
+      // ...and its row released the current-binding slot for the next attempt or the other Provider.
+      const [released] = await setupDatabase.database
+        .select()
+        .from(imBindings)
+        .where(eq(imBindings.setupAttemptId, first.id));
+      expect(released).toMatchObject({ status: "disabled", setupState: "canceled" });
+      expect(released?.disabledAt).not.toBeNull();
 
-      // The retained row is the reusable slot, so connecting again starts a second attempt on it.
+      // Connecting again is admitted on a fresh row, not on the released one.
       const second = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
       expect(second.id).not.toBe(first.id);
       expect(second.state).toBe("awaiting_user");
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+        bindingState: "provisioning",
+      });
+      const rows = await setupDatabase.database.select().from(imBindings).where(eq(imBindings.agentId, value.agent.id));
+      expect(rows).toHaveLength(2);
+      expect(rows.filter((row) => row.status !== "disabled")).toHaveLength(1);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("releases the slot of a failed first attempt while keeping the attempt's error visible", async () => {
+    const value = await setupFixture();
+    let rejectResult!: (error: unknown) => void;
+    const result = new Promise<{ appId: string; appSecret: string }>((_resolve, reject) => {
+      rejectResult = reject;
+    });
+    const service = new FeishuSetupService({
+      database: setupDatabase.database,
+      cipher: value.cipher,
+      instanceId: crypto.randomUUID(),
+      imBindings: value.imBindings,
+      // The first registration fails; any later one stays open so the assertion sees a live attempt.
+      registrations: {
+        start: vi
+          .fn()
+          .mockReturnValueOnce(registration(result, new Date()))
+          .mockReturnValueOnce(registration(new Promise<never>(() => undefined), new Date())),
+      },
+      activation: { activateAtomicAttempt: vi.fn() },
+    });
+    try {
+      const attempt = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      rejectResult(Object.assign(new Error("access denied"), { code: "access_denied" }));
+      await vi.waitFor(async () => {
+        const [row] = await setupDatabase.database
+          .select()
+          .from(imBindings)
+          .where(eq(imBindings.setupAttemptId, attempt.id));
+        expect(row?.setupState).toBe("failed");
+      });
+
+      const [released] = await setupDatabase.database
+        .select()
+        .from(imBindings)
+        .where(eq(imBindings.setupAttemptId, attempt.id));
+      expect(released).toMatchObject({ status: "disabled", lastErrorCode: "FEISHU_SETUP_DENIED" });
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
+
+      const second = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      expect(second.id).not.toBe(attempt.id);
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+        bindingState: "provisioning",
+      });
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("releases the slot of an expired first attempt when the Account starts again", async () => {
+    const value = await setupFixture();
+    // The first QR is already past its deadline, so the next start terminates it as expired.
+    const gateway: FeishuRegistrationGateway = {
+      start: vi
+        .fn()
+        .mockReturnValueOnce(registration(new Promise<never>(() => undefined), new Date(Date.now() - 120_000)))
+        .mockReturnValueOnce(registration(new Promise<never>(() => undefined), new Date())),
+    };
+    const service = new FeishuSetupService({
+      database: setupDatabase.database,
+      cipher: value.cipher,
+      instanceId: crypto.randomUUID(),
+      imBindings: value.imBindings,
+      registrations: gateway,
+      activation: { activateAtomicAttempt: vi.fn() },
+    });
+    try {
+      const first = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      const second = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      expect(second.id).not.toBe(first.id);
+      expect(second.state).toBe("awaiting_user");
+
+      const [expired] = await setupDatabase.database
+        .select()
+        .from(imBindings)
+        .where(eq(imBindings.setupAttemptId, first.id));
+      expect(expired).toMatchObject({ status: "disabled", setupState: "expired" });
       await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
         bindingState: "provisioning",
       });

@@ -24,6 +24,7 @@ import { FeishuOperationError, type FeishuSetupService } from "../services/im-bi
 import {
   disableImBindingInTransaction,
   isImBindingUniqueViolation,
+  releaseNeverActivatedSlots,
 } from "../services/im-bindings/im-binding-service.js";
 import type { ImBindingService } from "../services/im-bindings/index.js";
 import {
@@ -895,7 +896,8 @@ describe("ImBindingService persistence", () => {
       bindingState: "provisioning",
     });
 
-    // The exact shape FeishuSetupService.cancel commits for a first-time attempt.
+    // The shape a settled first-time attempt leaves behind when its slot was not released first (a
+    // row written before the release existed, or a crash between the two statements).
     await unitDatabase.database
       .update(imBindings)
       .set({
@@ -909,14 +911,14 @@ describe("ImBindingService persistence", () => {
       })
       .where(eq(imBindings.id, slot.id));
 
-    // Never activated and terminally canceled: the Agent has no connected channel.
+    // The row is still enabled, so the read guard alone must keep it out of the current binding.
     await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
     await expect(value.service.getHandoffForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
     await expect(
       value.service.getSetupBindingForAgent(value.bootstrap.userId, value.agent.id),
     ).resolves.toBeUndefined();
 
-    // The retained row is the reusable slot, so a second attempt on it is a live binding again.
+    // A row whose attempt is open again is a live binding even without a release.
     await unitDatabase.database
       .update(imBindings)
       .set({
@@ -947,6 +949,20 @@ describe("ImBindingService persistence", () => {
         lastErrorCode: "FEISHU_SETUP_CANCELED",
       })
       .where(eq(imBindings.id, bindingId));
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      id: bindingId,
+      bindingState: "active",
+    });
+  });
+
+  it("releases no slot it did not create: an activated binding survives a release request", async () => {
+    const value = await persistedFixture();
+    const bindingId = await value.service.activateFeishu(feishuInput(value.agent.id));
+    // The helper is the write half of "a terminal attempt is not a connection"; an activated row is a
+    // connection, so its guard must refuse even a direct call.
+    await releaseNeverActivatedSlots(unitDatabase.database, [bindingId], fixedNow);
+    const [after] = await unitDatabase.database.select().from(imBindings).where(eq(imBindings.id, bindingId));
+    expect(after).toMatchObject({ status: "active", setupState: null, disabledAt: null });
     await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
       id: bindingId,
       bindingState: "active",
