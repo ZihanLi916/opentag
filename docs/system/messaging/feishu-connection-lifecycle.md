@@ -40,8 +40,10 @@ openTag does not submit approvals or require the connecting user to be an admini
 
 The Server checks automatically. “Check latest status” uses the same due-time and concurrency
 limits; it does not create another App, bypass approval, or force repeated provider calls.
-“Cancel connection” explicitly removes the pending authorization. Closing a saved-authorization
-dialog preserves it. The QR stage retains its short-lived registration behavior.
+“Cancel connection” explicitly removes the pending authorization, and an Agent with no
+completed authorization is reported as disconnected, so both channel choices return.
+Closing a saved-authorization dialog preserves it. The QR stage retains its short-lived
+registration behavior.
 
 A new connection becomes usable only after full permission, identity, App and Runtime checks
 and the existing activation transaction succeed. A previously healthy connection may continue
@@ -71,6 +73,15 @@ transaction and history.
 with an encrypted candidate and no owner. An admitted check claims it as `validating`.
 A recoverable result returns it to `pending_activation`; a successful activation or terminal
 result clears temporary credential material. Cancel, disable and expiry also clear it.
+
+A terminal attempt leaves its `setup_state` on the row. The row is retained and reused by the next
+attempt, but it is not a connection: an `im_bindings` read reports a `provisioning` binding only
+while its attempt is `awaiting_user`, `validating` or `pending_activation`, and reports no binding
+at all once a first-time attempt ends `canceled`, `expired` or `failed`. That projection is the
+Server's single answer for Settings, the CLI and the HTTP binding and handoff routes, so a canceled
+connect leaves the Agent disconnected everywhere and both channel choices available again. The same
+terminal state on an `active` binding changes nothing: canceling a reauthorization keeps reporting
+the working connection.
 
 A candidate is retained for a fixed 30 days, independently of QR expiry. Repeated checks
 do not extend this deadline. The retention is not a deployment setting; only tests inject a
