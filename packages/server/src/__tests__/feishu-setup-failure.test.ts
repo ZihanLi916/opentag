@@ -600,14 +600,16 @@ describe("FeishuSetupService persistence", () => {
       activation: { activateAtomicAttempt: vi.fn() },
     });
     await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
-    const update = vi.spyOn(setupDatabase.database, "update").mockImplementationOnce(() => {
-      throw new Error("database unavailable during shutdown");
-    });
+    // The terminal write and its slot release share one transaction, so an unavailable database
+    // fails at that boundary.
+    const transaction = vi
+      .spyOn(setupDatabase.database, "transaction")
+      .mockRejectedValueOnce(new Error("database unavailable during shutdown"));
     try {
       await expect(service.stop()).rejects.toThrow("database unavailable during shutdown");
       expect(pending.abort).toHaveBeenCalledTimes(1);
     } finally {
-      update.mockRestore();
+      transaction.mockRestore();
       await service.stop();
     }
   });

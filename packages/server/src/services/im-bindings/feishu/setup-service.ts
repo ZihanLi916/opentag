@@ -242,8 +242,7 @@ export class FeishuSetupService {
     this.#reservations.clear();
     const now = this.#now();
     try {
-      await this.#settleTerminal(
-        this.#database,
+      await this.#settleTerminalInTransaction(
         { state: "failed", code: "FEISHU_SETUP_OWNER_RESTARTED" },
         and(eq(imBindings.setupOwnerInstanceId, this.#instanceId), eq(imBindings.setupState, "awaiting_user")),
         now,
@@ -661,8 +660,7 @@ export class FeishuSetupService {
       const state =
         code === "FEISHU_SETUP_EXPIRED" ? "expired" : code === "FEISHU_SETUP_CANCELED" ? "canceled" : "failed";
       try {
-        await this.#settleTerminal(
-          this.#database,
+        await this.#settleTerminalInTransaction(
           { state, code },
           and(
             eq(imBindings.setupAttemptId, attemptId),
@@ -1038,8 +1036,7 @@ export class FeishuSetupService {
   }
 
   async #finishClaim(claim: CandidateClaim, state: "expired" | "failed", errorCode: string, now: Date): Promise<void> {
-    await this.#settleTerminal(
-      this.#database,
+    await this.#settleTerminalInTransaction(
       { state, code: errorCode },
       and(
         eq(imBindings.id, claim.row.id),
@@ -1335,10 +1332,9 @@ export class FeishuSetupService {
 
   /**
    * The one terminal write for a settled attempt, plus the slot release it implies, so no terminal
-   * transition can leave a never-activated row holding the Agent's current-binding slot. Callers pass
-   * the transaction that must also carry the release; `stop()`, `#complete` and `#failInvalidContext`
-   * run outside one, so their release is the next statement and a crash between the two leaves a
-   * terminal row that `currentBindingOf` already hides.
+   * transition can leave a never-activated row holding the Agent's current-binding slot. Callers that
+   * already hold the Agent lock pass its transaction; the rest use `#settleTerminalInTransaction`, so
+   * the terminal state and the release always commit together.
    */
   async #settleTerminal(
     executor: DatabaseClient | DatabaseTransaction,
@@ -1367,35 +1363,40 @@ export class FeishuSetupService {
     return settled;
   }
 
+  /** The same settlement in its own transaction, for a caller that holds no Agent transaction. */
+  async #settleTerminalInTransaction(
+    outcome: { state: (typeof TERMINAL_SETUP_STATES)[number]; code: string },
+    where: SQL | undefined,
+    now: Date,
+  ): Promise<SetupRow[]> {
+    return this.#database.transaction((transaction) => this.#settleTerminal(transaction, outcome, where, now));
+  }
+
   /** Terminates an owned attempt, fenced on the exact owner and heartbeat that were read. */
   async #terminateOwnedAttempt(
     row: SetupRow,
     outcome: { state: "failed" | "expired"; code: string },
     now: Date,
-    executor: DatabaseClient | DatabaseTransaction = this.#database,
+    transaction?: DatabaseTransaction,
   ): Promise<void> {
-    await this.#settleTerminal(
-      executor,
-      outcome,
-      and(
-        eq(imBindings.id, row.id),
-        eq(imBindings.setupAttemptId, this.#attemptId(row)),
-        inArray(imBindings.setupState, ["awaiting_user", "validating"]),
-        row.setupOwnerInstanceId
-          ? eq(imBindings.setupOwnerInstanceId, row.setupOwnerInstanceId)
-          : isNull(imBindings.setupOwnerInstanceId),
-        row.setupOwnerHeartbeatAt
-          ? eq(imBindings.setupOwnerHeartbeatAt, row.setupOwnerHeartbeatAt)
-          : isNull(imBindings.setupOwnerHeartbeatAt),
-      ),
-      now,
+    const where = and(
+      eq(imBindings.id, row.id),
+      eq(imBindings.setupAttemptId, this.#attemptId(row)),
+      inArray(imBindings.setupState, ["awaiting_user", "validating"]),
+      row.setupOwnerInstanceId
+        ? eq(imBindings.setupOwnerInstanceId, row.setupOwnerInstanceId)
+        : isNull(imBindings.setupOwnerInstanceId),
+      row.setupOwnerHeartbeatAt
+        ? eq(imBindings.setupOwnerHeartbeatAt, row.setupOwnerHeartbeatAt)
+        : isNull(imBindings.setupOwnerHeartbeatAt),
     );
+    if (transaction) await this.#settleTerminal(transaction, outcome, where, now);
+    else await this.#settleTerminalInTransaction(outcome, where, now);
   }
 
   /** An authenticated-invalid or non-candidate context on a stale row can never activate. */
   async #failInvalidContext(row: SetupRow): Promise<void> {
-    await this.#settleTerminal(
-      this.#database,
+    await this.#settleTerminalInTransaction(
       { state: "failed", code: "FEISHU_SETUP_CONTEXT_INVALID" },
       this.#invalidContextWhere(row),
       this.#now(),
@@ -1432,17 +1433,15 @@ export class FeishuSetupService {
    * a hung check that is still heartbeating.
    */
   async #expireCandidate(row: SetupRow, now: Date, transaction?: DatabaseTransaction): Promise<void> {
-    await this.#settleTerminal(
-      transaction ?? this.#database,
-      { state: "expired", code: CANDIDATE_EXPIRED_CODE },
-      and(
-        eq(imBindings.id, row.id),
-        eq(imBindings.setupAttemptId, this.#attemptId(row)),
-        inArray(imBindings.setupState, ["pending_activation", "validating"]),
-        lte(imBindings.setupExpiresAt, now),
-      ),
-      now,
+    const outcome = { state: "expired", code: CANDIDATE_EXPIRED_CODE } as const;
+    const where = and(
+      eq(imBindings.id, row.id),
+      eq(imBindings.setupAttemptId, this.#attemptId(row)),
+      inArray(imBindings.setupState, ["pending_activation", "validating"]),
+      lte(imBindings.setupExpiresAt, now),
     );
+    if (transaction) await this.#settleTerminal(transaction, outcome, where, now);
+    else await this.#settleTerminalInTransaction(outcome, where, now);
   }
 
   #abortClaimForAttempt(attemptId: string): void {
