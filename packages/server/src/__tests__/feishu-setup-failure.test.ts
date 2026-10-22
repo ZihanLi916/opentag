@@ -256,6 +256,46 @@ describe("FeishuSetupService persistence", () => {
     expect(diagnostic).not.toHaveBeenCalled();
   });
 
+  it("reads back as no connection after a canceled first attempt and reuses the slot for a second one", async () => {
+    const value = await setupFixture();
+    const gateway: FeishuRegistrationGateway = {
+      // Neither registration finishes authorizing: the Account cancels the first and restarts later.
+      // The QR starts now so it is still open when the Account cancels it.
+      start: vi.fn(() => registration(new Promise<never>(() => undefined), new Date())),
+    };
+    const service = new FeishuSetupService({
+      database: setupDatabase.database,
+      cipher: value.cipher,
+      instanceId: crypto.randomUUID(),
+      imBindings: value.imBindings,
+      registrations: gateway,
+      activation: { activateAtomicAttempt: vi.fn() },
+    });
+    try {
+      const first = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+        bindingState: "provisioning",
+      });
+      await expect(service.cancel(value.bootstrap.userId, first.id)).resolves.toMatchObject({ state: "canceled" });
+
+      // The canceled attempt never activated, so the Agent has no connected channel.
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
+      await expect(
+        value.imBindings.getHandoffForAgent(value.bootstrap.userId, value.agent.id),
+      ).resolves.toBeUndefined();
+
+      // The retained row is the reusable slot, so connecting again starts a second attempt on it.
+      const second = await service.createOrReuse(value.bootstrap.userId, value.agent.id, "create");
+      expect(second.id).not.toBe(first.id);
+      expect(second.state).toBe("awaiting_user");
+      await expect(value.imBindings.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+        bindingState: "provisioning",
+      });
+    } finally {
+      await service.stop();
+    }
+  });
+
   it("supervises a detached setup heartbeat failure with one event and counter", async () => {
     vi.useFakeTimers();
     try {
