@@ -32,6 +32,7 @@ import {
   ImBindingUnbindRequiredError,
   ImBindingService as RealImBindingService,
 } from "../services/im-bindings/index.js";
+import { SlackConfigurationService } from "../services/im-bindings/slack/index.js";
 import { createUnitDatabase, type UnitDatabase } from "./support/unit-database.js";
 
 const userId = "53e2babe-e4ac-4e2c-b7d1-d092d5a4568e";
@@ -868,7 +869,7 @@ describe("ImBindingService persistence", () => {
     });
   });
 
-  it("reports a canceled first setup attempt as no connected channel and an in-flight one as provisioning", async () => {
+  it("reports a canceled first setup attempt as no connected channel and admits Slack over its residual row", async () => {
     const value = await persistedFixture();
     const [slot] = await unitDatabase.database
       .insert(imBindings)
@@ -935,6 +936,53 @@ describe("ImBindingService persistence", () => {
       id: slot.id,
       bindingState: "provisioning",
     });
+
+    // Back to the residual shape a previous binary leaves behind, then prove the other Provider is
+    // admitted: the Slack reads use the same current-binding answer, so no
+    // IM_BINDING_UNBIND_REQUIRED reaches the user, and the create releases the slot it needs.
+    await unitDatabase.database
+      .update(imBindings)
+      .set({
+        setupState: "canceled",
+        lastErrorCode: "FEISHU_SETUP_CANCELED",
+        setupOwnerInstanceId: null,
+        setupOwnerHeartbeatAt: null,
+        encryptedSetupContext: null,
+        setupExpiresAt: null,
+        updatedAt: fixedNow,
+      })
+      .where(eq(imBindings.id, slot.id));
+    const slack = new SlackConfigurationService({
+      api: {
+        inspectInstallation: vi.fn().mockResolvedValue({
+          appId: null,
+          teamId: "T_RESIDUAL",
+          enterpriseId: null,
+          botUserId: "U_RESIDUAL",
+          botId: "B_RESIDUAL",
+          grantedBotScopes: [...SLACK_REQUIRED_BOT_SCOPES],
+        }),
+      } as never,
+      database: unitDatabase.database,
+      imBindings: value.service,
+      now: () => fixedNow,
+    });
+    await expect(slack.currentBinding(value.bootstrap.userId, value.agent.id)).resolves.toBeNull();
+    const configured = await slack.configure(value.bootstrap.userId, value.agent.id, {
+      intent: "create",
+      expectedBinding: null,
+      appId: "A_RESIDUAL",
+      botAccessToken: "xoxb-residual-token",
+      signingSecret: "residual-signing-secret",
+    });
+    expect(configured).toMatchObject({ appId: "A_RESIDUAL", teamId: "T_RESIDUAL", credentialGeneration: 1 });
+    // The Slack insert took the slot, so the residual row released it under the configuration lock.
+    const [releasedResidual] = await unitDatabase.database.select().from(imBindings).where(eq(imBindings.id, slot.id));
+    expect(releasedResidual).toMatchObject({ status: "disabled", setupState: "canceled" });
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      provider: "slack",
+      bindingState: "active",
+    });
   });
 
   it("keeps reporting a working binding whose reauthorization attempt was canceled", async () => {
@@ -954,7 +1002,6 @@ describe("ImBindingService persistence", () => {
       bindingState: "active",
     });
   });
-
   it("releases no slot it did not create: an activated binding survives a release request", async () => {
     const value = await persistedFixture();
     const bindingId = await value.service.activateFeishu(feishuInput(value.agent.id));

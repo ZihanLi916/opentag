@@ -7171,6 +7171,72 @@ describe("IM binding persistence", () => {
     }
   });
 
+  it.each(["canceled", "expired", "failed"] as const)(
+    "admits Slack over a pre-upgrade terminal %s Feishu row",
+    async (setupState) => {
+      const value = await unboundFixture();
+      const agent = await new AgentService(value.database).createForAccount(value.bootstrap.userId, {
+        name: `legacy-${setupState}`,
+        displayName: `Legacy ${setupState}`,
+        runtimeProvider: "codex",
+        computerId: value.computer.id,
+      });
+      // The exact row the previous binaries left behind: a first-time attempt that ended terminal and
+      // kept the Agent's only slot. Seeded directly, never through a terminal transition.
+      const [legacy] = await value.database
+        .insert(imBindings)
+        .values({
+          agentId: agent.id,
+          provider: "feishu",
+          status: "provisioning",
+          setupAttemptId: crypto.randomUUID(),
+          setupIntent: "create",
+          setupState,
+          lastErrorCode: `FEISHU_SETUP_${setupState.toUpperCase()}`,
+        })
+        .returning();
+      if (!legacy) throw new Error("Legacy Feishu fixture was not created");
+      await expect(value.imBindingService.getForAgent(value.bootstrap.userId, agent.id)).resolves.toBeUndefined();
+
+      const slack = new SlackConfigurationService({
+        api: {
+          inspectInstallation: vi.fn().mockResolvedValue({
+            appId: null,
+            teamId: "T_LEGACY",
+            enterpriseId: null,
+            botUserId: "U_LEGACY",
+            botId: "B_LEGACY",
+            grantedBotScopes: [...SLACK_REQUIRED_BOT_SCOPES],
+          }),
+        } as never,
+        database: value.database,
+        imBindings: value.imBindingService,
+        now: () => new Date("2026-08-25T00:00:00.000Z"),
+      });
+      // No IM_BINDING_UNBIND_REQUIRED: the terminal first attempt is not a current binding for Slack.
+      await expect(slack.currentBinding(value.bootstrap.userId, agent.id)).resolves.toBeNull();
+      const configured = await slack.configure(value.bootstrap.userId, agent.id, {
+        intent: "create",
+        expectedBinding: null,
+        appId: "A_LEGACY",
+        botAccessToken: "{{API_KEY_legacyxoxb}}",
+        signingSecret: "legacy-signing-secret",
+      });
+      expect(configured).toMatchObject({ appId: "A_LEGACY", teamId: "T_LEGACY", credentialGeneration: 1 });
+
+      const rows = await value.database.select().from(imBindings).where(eq(imBindings.agentId, agent.id));
+      expect(rows.find((row) => row.id === legacy.id)).toMatchObject({ status: "disabled", setupState });
+      expect(rows.find((row) => row.id === configured.imBindingId)).toMatchObject({
+        provider: "slack",
+        status: "active",
+      });
+      await expect(value.imBindingService.getForAgent(value.bootstrap.userId, agent.id)).resolves.toMatchObject({
+        provider: "slack",
+        bindingState: "active",
+      });
+    },
+  );
+
   it("lets Slack take the slot after a canceled first Feishu attempt", async () => {
     const value = await unboundFixture();
     const setup = new FeishuSetupService({
