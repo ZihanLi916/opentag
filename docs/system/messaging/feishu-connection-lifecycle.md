@@ -81,7 +81,7 @@ cleared. That releases the Agent's single current-binding row and the Provider a
 entries it held (`im_bindings_agent_current_unique`, `im_bindings_feishu_app_current_unique`), so
 no reader can still see a connection, the next attempt inserts a fresh row, and the other Provider
 can configure. Cancel, expiry and failure all settle this way, and none of them emits the teardown
-that an unbound live connection emits, because no credential was ever issued.
+that disconnecting a live connection emits, because no credential was ever issued.
 
 `active` bindings are exempt: the release matches only rows with no `activated_at` and no issued
 credential, so a reauthorization attempt that ends terminal keeps the working connection, its
