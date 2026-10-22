@@ -5,7 +5,7 @@ import {
   type AgentSetupRuntimeState,
   projectAgentSetupComponents,
 } from "@opentag/shared/browser";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../app.js";
 import {
@@ -97,6 +97,179 @@ async function expectPreparationGate(): Promise<HTMLButtonElement> {
 
 describe("Agent Setup route boundary", () => {
   beforeEach(resetWebAppState);
+
+  it("keeps the account shell mounted and restores an unfinished creation draft after a visit home", async () => {
+    installApi();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("link", { name: "New Agent" }));
+    await screen.findByRole("heading", { name: "Where should your agent run?" });
+    const sidebar = screen.getByRole("complementary", { name: "Account Agents" });
+    const main = screen.getByRole("main");
+    expect(screen.getAllByRole("button", { name: "Account menu" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "openTag" }).getAttribute("href")).toBe("/agents");
+    expect(screen.queryByRole("button", { name: "Back to agents" })).toBeNull();
+    expect(document.querySelector('[data-ui="agent-create"] > header')).toBeNull();
+    expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Local computer/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "draft-helper" } });
+    fireEvent.click(screen.getByRole("link", { name: "All Agents" }));
+    fireEvent.click(await screen.findByRole("link", { name: "New Agent" }));
+
+    expect((await screen.findByLabelText("Agent name")) as HTMLInputElement).toHaveProperty("value", "draft-helper");
+    expect(screen.getByRole("button", { name: /Claude Code/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("complementary", { name: "Account Agents" })).toBe(sidebar);
+    expect(screen.getByRole("main")).toBe(main);
+    expect(agentCreationPosts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+    await expectPreparationGate();
+    expect(screen.getByRole("complementary", { name: "Account Agents" })).toBe(sidebar);
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(document.querySelector('[data-ui="agent-setup"] .opentag-logo')).toBeNull();
+    expect(document.querySelector('[data-ui="agent-setup"] > header')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back to agent" })).toBeNull();
+    fireEvent.click(screen.getByRole("link", { name: "All Agents" }));
+    fireEvent.click(await screen.findByRole("link", { name: "New Agent" }));
+    expect(await screen.findByRole("heading", { name: "Where should your agent run?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByLabelText("Agent name")).not.toHaveProperty("value", "draft-helper");
+  });
+
+  it("does not pull the reader back into setup when a creation finishes after navigating home", async () => {
+    let finishCreation: () => void = () => undefined;
+    installApi({
+      agentCreate: () =>
+        new Promise<void>((resolve) => {
+          finishCreation = resolve;
+        }),
+    });
+    window.history.replaceState({}, "", "/agents/setup?action=create");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Local computer/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: /Codex/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+    await waitFor(() => expect(agentCreationPosts()).toHaveLength(1));
+    fireEvent.click(screen.getByRole("link", { name: "All Agents" }));
+    await screen.findByRole("heading", { name: "All Agents" });
+    await act(async () => finishCreation());
+    expect(window.location.pathname).toBe("/agents");
+    expect(screen.getByRole("heading", { name: "All Agents" })).toBeTruthy();
+  });
+
+  it.each([false, true])(
+    "locks the submitted draft while creation is pending after navigation=%s",
+    async (leaveAndReturn) => {
+      let finishCreation: () => void = () => undefined;
+      installApi({
+        agentCreate: () =>
+          new Promise<void>((resolve) => {
+            finishCreation = resolve;
+          }),
+      });
+      window.history.replaceState({}, "", "/agents/setup?action=create");
+      render(<App />);
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+      fireEvent.click(screen.getByRole("button", { name: /Codex/ }));
+      fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "draft-a" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+      await waitFor(() => expect(agentCreationPosts()).toHaveLength(1));
+      if (leaveAndReturn) {
+        fireEvent.click(screen.getByRole("link", { name: "All Agents" }));
+        fireEvent.click(await screen.findByRole("link", { name: "New Agent" }));
+      }
+      const name = await screen.findByLabelText("Agent name");
+      expect(name).toHaveProperty("disabled", true);
+      expect(screen.getByRole("button", { name: "Creating…" })).toHaveProperty("disabled", true);
+      expect(screen.getByRole("button", { name: /Claude Code/ })).toHaveProperty("disabled", true);
+      fireEvent.change(name, { target: { value: "draft-b" } });
+      fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+      expect(name).toHaveProperty("value", "draft-a");
+      expect(screen.getByRole("button", { name: /Codex/ }).getAttribute("aria-pressed")).toBe("true");
+      const form = name.closest("form");
+      if (!form) throw new Error("Creation form is unavailable");
+      fireEvent.submit(form);
+      expect(agentCreationPosts()).toHaveLength(1);
+      await act(async () => finishCreation());
+      await expectPreparationGate();
+      expect(window.location.search).toContain("agentId=");
+      expect(agentCreationPosts()).toHaveLength(1);
+    },
+  );
+
+  it("reports a refused pending creation and unlocks its draft for correction and retry", async () => {
+    let refuseCreation: (cause: Error) => void = () => undefined;
+    installApi({
+      agentCreate: () =>
+        new Promise<void>((_resolve, reject) => {
+          refuseCreation = reject;
+        }),
+    });
+    window.history.replaceState({}, "", "/agents/setup?action=create");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: /Codex/ }));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "draft-a" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+    await waitFor(() => expect(agentCreationPosts()).toHaveLength(1));
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "draft-b" } });
+    await act(async () => refuseCreation(new Error("Creation unavailable")));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByLabelText("Agent name")).toHaveProperty("value", "draft-a");
+    expect(screen.getByLabelText("Agent name")).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Create Agent" })).toHaveProperty("disabled", false);
+    fireEvent.change(screen.getByLabelText("Agent name"), { target: { value: "draft-b" } });
+    fireEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+    expect(screen.getByLabelText("Agent name")).toHaveProperty("value", "draft-b");
+    expect(screen.getByRole("button", { name: /Claude Code/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(agentCreationPosts()).toHaveLength(1);
+  });
+
+  it("keeps resource navigation and local sign-out working when layout storage is unavailable", async () => {
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new DOMException("Storage blocked", "SecurityError");
+    });
+    installApi();
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Account menu" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    await screen.findByRole("heading", { name: "Sign in to openTag" });
+    expect(window.location.pathname).toBe("/login");
+  });
+
+  it("keeps first-time completion full-screen across admission and reload, then retires that layout on exit", async () => {
+    installApi({ setupCompletedAt: null, bound: true });
+    window.history.replaceState({}, "", `/agents/setup?agentId=${agentId}`);
+    const firstVisit = render(<App />);
+    await screen.findByRole("button", { name: "View agent" });
+    expect(screen.queryByRole("complementary")).toBeNull();
+    firstVisit.unmount();
+
+    render(<App />);
+    await screen.findByRole("button", { name: "View agent" });
+    expect(screen.queryByRole("complementary")).toBeNull();
+    fireEvent.click(screen.getByRole("link", { name: "openTag" }));
+    await screen.findByRole("heading", { name: "All Agents" });
+    fireEvent.click(screen.getByRole("link", { name: "New Agent" }));
+    await screen.findByRole("heading", { name: "Where should your agent run?" });
+    expect(screen.getByRole("complementary", { name: "Account Agents" })).toBeTruthy();
+  });
+
+  it("keeps View agent as the completion action inside the account shell", async () => {
+    installApi({ bound: true });
+    window.history.replaceState({}, "", `/agents/setup?agentId=${agentId}`);
+    render(<App />);
+
+    const viewAgent = await screen.findByRole("button", { name: "View agent" });
+    expect(screen.getByRole("complementary", { name: "Account Agents" })).toBeTruthy();
+    expect(document.querySelector('[data-ui="agent-setup"] > header')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back to agent" })).toBeNull();
+    fireEvent.click(viewAgent);
+    await waitFor(() => expect(window.location.pathname).toBe(`/agents/${agentId}`));
+  });
 
   it("renders the creation flow without creating anything when the Account has no Agent", async () => {
     installAgentSetupApi({ emptyAgents: true, setupCompletedAt: null });
@@ -405,10 +578,10 @@ describe("Agent Setup route boundary", () => {
     expect(screen.getByText("An active Agent with this name already exists for this Account")).toBeTruthy();
   });
 
-  it("does not repeat a way back the header already offers", async () => {
+  it("does not repeat the Agent list destination already offered by the sidebar", async () => {
     /*
      * The bare fallback exists because this page can be the only one an Account can reach. An
-     * admitted Account already has Back to agents in the header, so a second control to the same
+     * admitted Account already has All Agents in the sidebar, so a second control to the same
      * destination, worded differently, would read as a different thing while doing the same one.
      */
     installAgentSetupApi();
@@ -443,7 +616,7 @@ describe("Agent Setup route boundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
 
     expect(await screen.findByText("An active Agent with this name already exists for this Account")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Back to agents" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "All Agents" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Go to your Agents" })).toBeNull();
   });
 
@@ -481,7 +654,7 @@ describe("Agent Setup route boundary", () => {
       `/agents/${agentId}`,
     );
     expect(window.location.search).toBe("?action=create");
-    expect(screen.getByRole("button", { name: "Back to agents" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "All Agents" })).toBeTruthy();
   });
 
   it("redirects an un-targeted visit to the canonical exact URL when the Account has one active Agent", async () => {
@@ -500,6 +673,21 @@ describe("Agent Setup route boundary", () => {
       .mock.calls.filter(([path, init]) => path === "/api/v1/me/setup/complete" && init?.method === "POST");
     expect(completions).toHaveLength(1);
     expect(completions[0]?.[1]?.body).toBe(JSON.stringify({ agentId }));
+  });
+
+  it("returns from the setup completion screen to the Agent list through the brand link", async () => {
+    installApi({ bound: true, setupCompletedAt: null });
+    window.history.replaceState({}, "", `/agents/setup?agentId=${agentId}`);
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "View agent" })).toBeTruthy();
+    const home = screen.getByRole("link", { name: "openTag" });
+    expect(home.getAttribute("href")).toBe("/agents");
+    fireEvent.click(home);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/agents"));
+    expect(await screen.findByRole("heading", { name: "All Agents" })).toBeTruthy();
+    expect(agentCreationPosts()).toHaveLength(0);
   });
 
   it("surfaces and then removes a Slack callback error on the canonical setup URL", async () => {
