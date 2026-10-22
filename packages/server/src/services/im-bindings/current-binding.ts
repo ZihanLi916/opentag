@@ -2,6 +2,13 @@ import { and, eq, isNull, ne, notInArray, or } from "drizzle-orm";
 import { imBindings } from "../../db/schema/index.js";
 
 /**
+ * Setup outcomes that end an attempt without activating its binding. A row that never activated and
+ * carries one of these is a finished attempt, not a connection: `currentBindingOf` hides it from the
+ * binding reads and `releaseNeverActivatedSlots` gives its slot back.
+ */
+export const TERMINAL_SETUP_STATES = ["canceled", "expired", "failed"] as const;
+
+/**
  * The current-binding predicate: a non-disabled row for this Agent that is still a connection.
  *
  * A first-time setup inserts the row as `provisioning` before anything is authorized, so the row's
@@ -20,7 +27,7 @@ export function currentBindingOf(agentId: string) {
     or(
       ne(imBindings.status, "provisioning"),
       isNull(imBindings.setupState),
-      notInArray(imBindings.setupState, ["canceled", "expired", "failed"]),
+      notInArray(imBindings.setupState, [...TERMINAL_SETUP_STATES]),
     ),
   );
 }

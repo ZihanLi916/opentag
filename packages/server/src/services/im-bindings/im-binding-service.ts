@@ -71,7 +71,7 @@ import {
 type QueryExecutor = Pick<DatabaseClient, "select">;
 type CredentialMaterialWithId = CredentialMaterialInput & { id?: string };
 
-export { disableImBindingInTransaction } from "./disable-im-binding.js";
+export { disableImBindingInTransaction, releaseNeverActivatedSlots } from "./disable-im-binding.js";
 
 export interface VerifiedFeishuBinding {
   profile?: BotProfile;
