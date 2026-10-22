@@ -867,6 +867,92 @@ describe("ImBindingService persistence", () => {
     });
   });
 
+  it("reports a canceled first setup attempt as no connected channel and an in-flight one as provisioning", async () => {
+    const value = await persistedFixture();
+    const [slot] = await unitDatabase.database
+      .insert(imBindings)
+      .values({
+        agentId: value.agent.id,
+        provider: "feishu",
+        status: "provisioning",
+        setupAttemptId: crypto.randomUUID(),
+        setupIntent: "create",
+        setupState: "awaiting_user",
+        setupOwnerInstanceId: crypto.randomUUID(),
+        setupOwnerHeartbeatAt: fixedNow,
+        encryptedSetupContext: "test-only",
+        setupExpiresAt: new Date(fixedNow.getTime() + 60_000),
+      })
+      .returning();
+    if (!slot) throw new Error("Setup slot fixture was not created");
+
+    // A QR challenge in flight is a legitimate provisioning state.
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      id: slot.id,
+      bindingState: "provisioning",
+    });
+    await expect(value.service.getHandoffForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      bindingState: "provisioning",
+    });
+
+    // The exact shape FeishuSetupService.cancel commits for a first-time attempt.
+    await unitDatabase.database
+      .update(imBindings)
+      .set({
+        setupState: "canceled",
+        lastErrorCode: "FEISHU_SETUP_CANCELED",
+        setupOwnerInstanceId: null,
+        setupOwnerHeartbeatAt: null,
+        encryptedSetupContext: null,
+        setupExpiresAt: null,
+        updatedAt: fixedNow,
+      })
+      .where(eq(imBindings.id, slot.id));
+
+    // Never activated and terminally canceled: the Agent has no connected channel.
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
+    await expect(value.service.getHandoffForAgent(value.bootstrap.userId, value.agent.id)).resolves.toBeUndefined();
+    await expect(
+      value.service.getSetupBindingForAgent(value.bootstrap.userId, value.agent.id),
+    ).resolves.toBeUndefined();
+
+    // The retained row is the reusable slot, so a second attempt on it is a live binding again.
+    await unitDatabase.database
+      .update(imBindings)
+      .set({
+        setupAttemptId: crypto.randomUUID(),
+        setupState: "awaiting_user",
+        setupOwnerInstanceId: crypto.randomUUID(),
+        setupOwnerHeartbeatAt: fixedNow,
+        encryptedSetupContext: "test-only",
+        setupExpiresAt: new Date(fixedNow.getTime() + 60_000),
+        lastErrorCode: null,
+      })
+      .where(eq(imBindings.id, slot.id));
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      id: slot.id,
+      bindingState: "provisioning",
+    });
+  });
+
+  it("keeps reporting a working binding whose reauthorization attempt was canceled", async () => {
+    const value = await persistedFixture();
+    const bindingId = await value.service.activateFeishu(feishuInput(value.agent.id));
+    await unitDatabase.database
+      .update(imBindings)
+      .set({
+        setupAttemptId: crypto.randomUUID(),
+        setupIntent: "reauthorize",
+        setupState: "canceled",
+        lastErrorCode: "FEISHU_SETUP_CANCELED",
+      })
+      .where(eq(imBindings.id, bindingId));
+    await expect(value.service.getForAgent(value.bootstrap.userId, value.agent.id)).resolves.toMatchObject({
+      id: bindingId,
+      bindingState: "active",
+    });
+  });
+
   it("issues versioned runtime credential grants and rejects stale authority", async () => {
     const value = await persistedFixture();
     const activated = await value.service.activateSlack(slackInput(value.agent.id), "B1");

@@ -25,7 +25,7 @@ import {
   ImBindingUnbindRequiredDetailSchema,
   SLACK_REQUIRED_BOT_SCOPES,
 } from "@opentag/shared";
-import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { DatabaseClient, DatabaseTransaction } from "../../db/client.js";
 import {
   agents,
@@ -212,6 +212,29 @@ export function isImBindingUniqueViolation(error: unknown, constraintName: strin
     current = "cause" in current ? current.cause : undefined;
   }
   return false;
+}
+
+/**
+ * The current-binding predicate: a non-disabled row for this Agent that is still a connection.
+ * A first-time setup inserts the row as `provisioning` before anything is authorized, so the row's
+ * existence is not a connection by itself. `provisioning` keeps counting while a setup attempt is
+ * in flight (`awaiting_user`, `validating`, `pending_activation`); once that attempt ends `canceled`,
+ * `expired` or `failed` the row is only a reusable slot and must not read back as connected.
+ *
+ * `provisioning` is part of the exclusion on purpose: a reauthorization attempt on a working binding
+ * also ends `canceled`, and that `active` connection must keep being reported. `setup_state is null`
+ * counts as current so a row without setup fields never silently disappears.
+ */
+function currentBindingOf(agentId: string) {
+  return and(
+    eq(imBindings.agentId, agentId),
+    ne(imBindings.status, "disabled"),
+    or(
+      ne(imBindings.status, "provisioning"),
+      isNull(imBindings.setupState),
+      notInArray(imBindings.setupState, ["canceled", "expired", "failed"]),
+    ),
+  );
 }
 
 function projectedErrorCode(input: {
@@ -753,7 +776,7 @@ export class ImBindingService {
       .from(imBindings)
       .innerJoin(agents, eq(agents.id, imBindings.agentId))
       .leftJoin(slackInstallations, eq(slackInstallations.id, imBindings.slackInstallationId))
-      .where(and(eq(imBindings.agentId, agentId), ne(imBindings.status, "disabled")))
+      .where(currentBindingOf(agentId))
       .limit(1);
     if (!row) return undefined;
     const activity = await this.#activity(row.id);
@@ -827,7 +850,7 @@ export class ImBindingService {
       .innerJoin(agents, eq(agents.id, imBindings.agentId))
       .leftJoin(computers, eq(computers.id, agents.computerId))
       .leftJoin(slackInstallations, eq(slackInstallations.id, imBindings.slackInstallationId))
-      .where(and(eq(imBindings.agentId, agentId), ne(imBindings.status, "disabled")))
+      .where(currentBindingOf(agentId))
       .limit(1);
     if (!row) return undefined;
     const credential = this.#inspectBindingCredentials(row, row.slackInstallation);
