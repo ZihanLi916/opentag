@@ -1,4 +1,11 @@
-/* Shared OpenTag recipes. Only the semantic adapter attaches these classes. */
+/*
+ * Shared OpenTag recipes. Only the semantic adapter attaches these classes.
+ *
+ * Every line-height here must clear Manrope's own line-box floor. A line box is centred on the font's content
+ * area, not on its ink: Manrope (hhea ascent 2132 / descent 600) puts the box's bottom edge `L/2 - 0.383em` below
+ * the baseline, while the `g` descender reaches 0.255em, so leading under 1.276 leaves descenders outside the
+ * element, where a truncating or overflowing ancestor cuts them. `text-metrics.test.ts` pins that floor.
+ */
 .ui-text {
   font-family: var(--ui-font);
   line-height: 1.5;
@@ -24,7 +31,7 @@
 .ui-text[data-text-size]:is(h1),
 .ui-text[data-text-size][data-heading-size="page"] {
   font-size: var(--ui-page-title);
-  line-height: 1.2;
+  line-height: 1.35;
   letter-spacing: -0.025em;
 }
 .ui-text[data-text-size]:is(h2) {
