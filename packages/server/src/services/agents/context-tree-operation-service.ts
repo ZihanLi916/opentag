@@ -1,21 +1,24 @@
 import {
   type AgentAdminConfig,
   CONTEXT_TREES_MAX,
+  type ContextTreeConnection,
+  ContextTreeConnectionSchema,
   type ContextTreeOperationRequest,
   ContextTreeOperationRequestSchema,
   type ContextTreeOperationResponse,
+  contextTreeIdentity,
+  RUNTIME_CAPABILITY,
 } from "@opentag/shared";
-import type { ContextTreeOperationOwner } from "../../runtime/context-tree-operation-owner.js";
+import type { ConnectionRegistry } from "../../runtime/connection-registry.js";
 import type { AgentService } from "./agent-service.js";
-import type { CloudContextTreeOperationRunner } from "./cloud-context-tree-operations.js";
+import type { GitHubContextTreeOperationRunner } from "./github-context-tree-operations.js";
 
 /** Validate remotely first, then compare revisions again inside the Agent update transaction. */
 export class ContextTreeOperationService {
   constructor(
     readonly agents: Pick<AgentService, "getConfigById" | "updateContextTreeSelection">,
-    readonly owner: ContextTreeOperationOwner,
-    /** Server-side Cloud connect for Cloud Computers, which have no Runtime owner WebSocket. */
-    readonly cloud?: CloudContextTreeOperationRunner,
+    readonly registry: Pick<ConnectionRegistry, "currentInstanceId" | "supportsCapability">,
+    readonly github: GitHubContextTreeOperationRunner,
   ) {}
   async run(userId: string, agentId: string, raw: ContextTreeOperationRequest): Promise<ContextTreeOperationResponse> {
     const input = ContextTreeOperationRequestSchema.parse(raw);
@@ -34,8 +37,9 @@ export class ContextTreeOperationService {
         ? { status: "completed", repository: null }
         : await this.#dispatch(userId, agentId, config, input.action, input);
     if (result.status !== "completed") return result;
-    if (result.repository?.toLowerCase() !== input.repository?.toLowerCase())
-      return { status: "failed", code: "failed" };
+    const selection = updatedSelection(connections, input, result);
+    if (!selection) return { status: "failed", code: "failed" };
+    if (selection === connections) return result;
     try {
       await this.agents.updateContextTreeSelection(
         userId,
@@ -46,9 +50,7 @@ export class ContextTreeOperationService {
           computerId: config.computerId,
           status: config.status,
         },
-        input.action === "disconnect"
-          ? connections.filter((entry) => entry.alias !== input.alias)
-          : [...connections, { alias: input.alias, repository: input.repository as string }],
+        selection,
       );
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "AGENT_REVISION_CONFLICT")
@@ -58,10 +60,7 @@ export class ContextTreeOperationService {
     return result;
   }
 
-  /**
-   * Both paths share the revision/pause gates and the CAS commit above; only the execution venue
-   * differs. Disconnect needs neither. The schema refinement guarantees a repository here.
-   */
+  /** GitHub settings operations always run on the Server. */
   async #dispatch(
     userId: string,
     agentId: string,
@@ -70,22 +69,32 @@ export class ContextTreeOperationService {
     input: ContextTreeOperationRequest,
   ): Promise<ContextTreeOperationResponse> {
     if (config.computerId === null) return { status: "failed", code: "computer_unavailable" };
-    const kind = await this.cloud?.computerKind(config.computerId);
-    if (this.cloud && kind && (action === "connect" || kind === "cloud")) {
-      return this.cloud.run({
-        accountId: userId,
-        agentId,
-        action,
-        alias: input.alias,
-        repository: input.repository ?? "",
-      });
+    const kind = await this.github.computerKind(config.computerId);
+    if (!kind) return { status: "failed", code: "computer_unavailable" };
+    if (kind === "local") {
+      const failure = this.#checkComputer(config.computerId);
+      if (failure) return failure;
     }
-    return this.owner.start({
+    const result = await this.github.run({
+      accountId: userId,
       agentId,
-      computerId: config.computerId,
-      requireStopped: config.runtimeConfig.contextTrees.length > 0,
-      input,
+      action,
+      path: input.path,
+      ref: input.ref,
+      repository: input.repository,
     });
+    // A reconnect during remote verification must not persist a selection for an older peer.
+    return kind === "local" && result.status === "completed"
+      ? (this.#checkComputer(config.computerId) ?? result)
+      : result;
+  }
+
+  #checkComputer(computerId: string): Extract<ContextTreeOperationResponse, { status: "failed" }> | undefined {
+    const instanceId = this.registry.currentInstanceId(computerId);
+    if (!instanceId) return { status: "failed", code: "computer_unavailable" };
+    if (!this.registry.supportsCapability(computerId, instanceId, RUNTIME_CAPABILITY.contextTreeSettings))
+      return { status: "failed", code: "capability_missing" };
+    return undefined;
   }
 }
 
@@ -95,15 +104,43 @@ function attachmentOutcome(
   input: ContextTreeOperationRequest,
 ): ContextTreeOperationResponse | undefined {
   const connections = config.runtimeConfig.contextTrees;
-  const existing = connections.find((entry) => entry.alias === input.alias);
+  const existing = connections.find(
+    (entry) =>
+      contextTreeIdentity(entry) === contextTreeIdentity(input) ||
+      (input.action === "create" &&
+        input.ref === "HEAD" &&
+        entry.repository.toLowerCase() === input.repository.toLowerCase() &&
+        entry.path === input.path),
+  );
   if (input.action !== "disconnect") {
     if (existing)
-      return existing.repository.toLowerCase() === input.repository?.toLowerCase()
-        ? { status: "completed", repository: existing.repository }
-        : { status: "failed", code: "alias_conflict" };
-    if (connections.some((entry) => entry.repository.toLowerCase() === input.repository?.toLowerCase()))
-      return { status: "failed", code: "repository_conflict" };
+      return {
+        status: "completed",
+        repository: existing.repository,
+        ...(input.ref === "HEAD" ? { ref: existing.ref } : {}),
+      };
     if (connections.length >= CONTEXT_TREES_MAX) return { status: "failed", code: "tree_limit_reached" };
   } else if (!existing) return { status: "completed", repository: null };
   return undefined;
+}
+
+function updatedSelection(
+  connections: ContextTreeConnection[],
+  input: ContextTreeOperationRequest,
+  result: Extract<ContextTreeOperationResponse, { status: "completed" }>,
+): ContextTreeConnection[] | undefined {
+  if (result.repository?.toLowerCase() !== (input.action === "disconnect" ? undefined : input.repository.toLowerCase()))
+    return undefined;
+  if (input.action === "disconnect")
+    return connections.filter((entry) => contextTreeIdentity(entry) !== contextTreeIdentity(input));
+  if (input.ref === "HEAD" && (!result.ref || result.ref === "HEAD")) return undefined;
+  const source = ContextTreeConnectionSchema.parse({
+    kind: input.kind,
+    repository: input.repository,
+    path: input.path,
+    ref: result.ref ?? input.ref,
+  });
+  return connections.some((entry) => contextTreeIdentity(entry) === contextTreeIdentity(source))
+    ? connections
+    : [...connections, source];
 }

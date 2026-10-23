@@ -66,7 +66,6 @@ import {
 import { AgentWorkspaceManager } from "./agent-workspace.js";
 import { ClientRuntime, type ClientRuntimeOptions } from "./client-runtime.js";
 import { ContextTreeManager, resolveContextTreePackage } from "./context-tree.js";
-import { ContextTreeSettings } from "./context-tree-settings.js";
 import { MvpTurnReportRecovery } from "./mvp-turn-report-recovery.js";
 import { resolveAccountHome } from "./provider-cli/account-layout.js";
 import { ProviderCliManager } from "./provider-cli/manager.js";
@@ -302,8 +301,6 @@ export interface CreateClientRuntimeOptions {
      * Runner-side mapping because the execution environment targets the Sandbox loopback.
      */
     readonly contextTreeEnvironment?: (sessionId: string) => Readonly<Record<string, string | undefined>> | undefined;
-    /** Trusted host-side environment for Context Tree settings operations, when one exists. */
-    readonly contextTreeManagementEnvironment?: () => NodeJS.ProcessEnv | undefined;
   };
   /**
    * Proxy mode only: opens the Server-issued validation execution for CLI readiness.
@@ -556,9 +553,6 @@ async function materializeProductionProviderLayout(
   const claudeCodeHome = await realpath(configuredClaudeCodeHome);
   const piHome = await realpath(configuredPiHome);
   const piSessionDirectory = await realpath(configuredPiSessionDirectory);
-  const contextTreeBin = resolveOpenTagHomeLayout(options.home).contextTreeBin;
-  const withContextTreeOnPath = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
-    prependPath(environment, contextTreeBin);
   const canonicalDefaultClaudeCodeHome = await realpath(defaultClaudeCodeHome).catch(() => defaultClaudeCodeHome);
   const loginShellDiscovery = createLoginShellDiscovery();
   const discovery = loginShellDiscovery.options;
@@ -584,26 +578,20 @@ async function materializeProductionProviderLayout(
         command: options.codexCommand ?? "codex",
         codexHome,
         discovery,
-        environment: withContextTreeOnPath(
-          codexAgentRuntimeEnvironment({ ...sourceEnvironment, CODEX_HOME: codexHome }),
-        ),
+        environment: codexAgentRuntimeEnvironment({ ...sourceEnvironment, CODEX_HOME: codexHome }),
         sourceEnvironment,
       }),
       resolvedClaudeCodeFactory({
         claudeCodeHome,
         command: options.claudeCodeCommand ?? "claude",
         discovery,
-        environment: withContextTreeOnPath(
-          claudeCodeProcessEnvironment(sourceEnvironment, claudeCodeHome, canonicalDefaultClaudeCodeHome),
-        ),
+        environment: claudeCodeProcessEnvironment(sourceEnvironment, claudeCodeHome, canonicalDefaultClaudeCodeHome),
         sourceEnvironment,
       }),
       resolvedPiFactory({
         command: options.piCommand ?? "pi",
         discovery,
-        environment: withContextTreeOnPath(
-          piAgentRuntimeEnvironment({ ...sourceEnvironment, PI_CODING_AGENT_DIR: piHome }),
-        ),
+        environment: piAgentRuntimeEnvironment({ ...sourceEnvironment, PI_CODING_AGENT_DIR: piHome }),
         piHome,
         sessionDirectory: piSessionDirectory,
         skillPaths: contextTreeSkillsPath ? [contextTreeSkillsPath] : [],
@@ -765,6 +753,7 @@ export async function createClientRuntime(
     cliCommand: options.cliCommand ?? "opentag",
     cleanupProviderEnvironment: (sessionId) => credentialEnvironment.cleanup(sessionId),
     contextTree,
+    contextTreeBin: contextTree.binDirectory(),
     contextTreeEnvironment: (sessionId) => {
       const hostSide = options.runtimeCredentials?.contextTreeEnvironment?.(sessionId);
       if (hostSide) return hostSide;
@@ -854,16 +843,6 @@ export async function createClientRuntime(
     slackAutoSetup: new SlackAutoSetup({
       environment: { ...sourceEnvironment, OPENTAG_HOME: resolveOpenTagHomeLayout(options.home).home },
       cliEntry: options.slackAutoSetupCliEntry,
-    }),
-    contextTreeSettings: new ContextTreeSettings({
-      home: options.home,
-      environment: sourceEnvironment,
-      hasAgentSessions: runtimeManager.hasAgentSessions.bind(runtimeManager),
-      exclusive: contextTree.runExclusive.bind(contextTree),
-      managedCredentials: credentialMode === "proxy",
-      ...(options.runtimeCredentials?.contextTreeManagementEnvironment
-        ? { managedEnvironment: options.runtimeCredentials.contextTreeManagementEnvironment }
-        : {}),
     }),
     logger: moduleLogger("client-runtime"),
     reconciler,
@@ -1017,17 +996,6 @@ function productionProviderRegistration(
     return { ...common, policy: claudeCodeRuntimePolicy, validate: validateClaudeCodeRuntimePolicy };
   }
   return { ...common, policy: piRuntimePolicy, validate: validatePiRuntimePolicy };
-}
-
-function prependPath(
-  environment: NodeJS.ProcessEnv,
-  directory: string,
-  pathDelimiter: string = delimiter,
-): NodeJS.ProcessEnv {
-  const current = environment.PATH;
-  if (!current) return { ...environment, PATH: directory };
-  if (current === directory || current.startsWith(`${directory}${pathDelimiter}`)) return environment;
-  return { ...environment, PATH: `${directory}${pathDelimiter}${current}` };
 }
 
 function withSearchBinOnPath(

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,14 +13,12 @@ import type {
 } from "@opentag/shared";
 import { GITHUB_CONNECTION_ERROR_CODES } from "@opentag/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConnectionRegistry } from "../runtime/connection-registry.js";
-import { ContextTreeOperationOwner } from "../runtime/context-tree-operation-owner.js";
-import {
-  type CloudContextTreeGitHubManagement,
-  CloudContextTreeOperations,
-  type CloudContextTreeOperationsOptions,
-} from "../services/agents/cloud-context-tree-operations.js";
 import { ContextTreeOperationService } from "../services/agents/context-tree-operation-service.js";
+import {
+  type ContextTreeGitHubManagement,
+  GitHubContextTreeOperations,
+  type GitHubContextTreeOperationsOptions,
+} from "../services/agents/github-context-tree-operations.js";
 import { GitHubConnectionServiceError } from "../services/github/errors.js";
 import { GitPublicationError } from "../services/github-proxy/git-packets.js";
 import { type GitProcessOptions, runTrustedProcess } from "../services/github-proxy/git-process.js";
@@ -49,7 +47,7 @@ function binding(overrides: Partial<GitHubRepositoryBinding> = {}): GitHubReposi
     repositoryId: "777",
     fullNameDisplay: "Acme/Memory",
     agentScopes: [
-      { agentId: AGENT, role: "context_tree", access: "write", publish: "direct", branch: "refs/heads/master" },
+      { agentId: AGENT, role: "context_tree", access: "write", publish: "direct", branch: "refs/heads/main" },
     ],
     ...overrides,
   };
@@ -118,7 +116,7 @@ function management(row: GitHubConnectionStatus | null | (() => GitHubConnection
       };
     }),
   };
-  return stub as unknown as CloudContextTreeGitHubManagement & typeof stub;
+  return stub as unknown as ContextTreeGitHubManagement & typeof stub;
 }
 
 /** A verifier stub that mirrors the real verifier's recheck before and after the remote read. */
@@ -133,11 +131,12 @@ function verifier(
 }
 
 function operations(
-  managementStub: CloudContextTreeGitHubManagement,
-  options: Partial<CloudContextTreeOperationsOptions> = {},
+  managementStub: ContextTreeGitHubManagement,
+  options: Partial<GitHubContextTreeOperationsOptions> = {},
 ) {
-  return new CloudContextTreeOperations({
+  return new GitHubContextTreeOperations({
     management: managementStub,
+    api: { createPrivateRepository: vi.fn(), initializeContextTree: vi.fn(), getRepository: vi.fn() },
     credentials: {
       acquire: vi.fn(async () => ({ token: "ghu_scoped_test_token", release: vi.fn(async () => undefined) })),
     },
@@ -149,9 +148,11 @@ function operations(
   });
 }
 
-function runInput(overrides: Partial<Parameters<CloudContextTreeOperations["run"]>[0]> = {}) {
+function runInput(overrides: Partial<Parameters<GitHubContextTreeOperations["run"]>[0]> = {}) {
   return {
-    alias: "memory",
+    kind: "git" as const,
+    path: ".",
+    ref: "main",
     accountId: ACCOUNT,
     agentId: AGENT,
     action: "connect" as const,
@@ -182,7 +183,7 @@ describe("Cloud Context Tree connect", () => {
     });
     expect(github.getOverview).toHaveBeenCalledWith(ACCOUNT);
     expect(verify).toHaveBeenCalledWith(
-      expect.objectContaining({ repositoryId: "777", ref: "refs/heads/master", signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ repositoryId: "777", ref: "refs/heads/main", signal: expect.any(AbortSignal) }),
     );
     expect(remoteFactory).toHaveBeenCalledWith("acme/memory", "ghu_scoped_test_token");
     expect(github.resolveRepository).toHaveBeenCalledWith({
@@ -191,6 +192,17 @@ describe("Cloud Context Tree connect", () => {
       access: "read",
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("resolves remote HEAD to the actual default branch", async () => {
+    const verify = vi.fn(async () => "a".repeat(40));
+    const cloud = operations(management(connection()), { treeHeads: { verify } });
+    expect(await cloud.run(runInput({ ref: "HEAD" }))).toEqual({
+      status: "completed",
+      repository: "Acme/Memory",
+      ref: "master",
+    });
+    expect(verify).toHaveBeenCalledWith(expect.objectContaining({ ref: "refs/heads/master" }));
   });
 
   it("ignores legacy Agent bindings when the requested repository is readable", async () => {
@@ -270,21 +282,6 @@ describe("Cloud Context Tree connect", () => {
     expect(await operations(branchless).run(runInput())).toEqual({ status: "completed", repository: "Acme/Memory" });
   });
 
-  it("returns capability_missing for create without touching GitHub or allocating anything", async () => {
-    const github = management(connection());
-    const cloud = operations(github);
-    expect(await cloud.run(runInput({ action: "create" }))).toEqual({
-      status: "failed",
-      code: "capability_missing",
-    });
-    expect(await cloud.run(runInput({ action: "create" }))).toEqual({
-      status: "failed",
-      code: "capability_missing",
-    });
-    expect(github.getOverview).not.toHaveBeenCalled();
-    expect(github.getCurrentUserCredential).not.toHaveBeenCalled();
-  });
-
   it("joins an identical in-flight replay, refuses a different one, and releases admission on failure", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -335,7 +332,7 @@ describe("Cloud Context Tree connect", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Dispatch through the shared operation service (Local path unchanged).
+ * Dispatch through the shared operation service.
  * ------------------------------------------------------------------ */
 
 function agentConfig(overrides: Partial<AgentAdminConfig> = {}): AgentAdminConfig {
@@ -352,8 +349,9 @@ function agentConfig(overrides: Partial<AgentAdminConfig> = {}): AgentAdminConfi
 
 function request(overrides: Partial<ContextTreeOperationRequest> = {}): ContextTreeOperationRequest {
   return {
-    alias: "memory",
-    operationId: randomUUID(),
+    kind: "git" as const,
+    path: ".",
+    ref: "main",
     expectedRevision: 3,
     expectedRuntimeConfigRevision: 7,
     action: "connect",
@@ -364,12 +362,9 @@ function request(overrides: Partial<ContextTreeOperationRequest> = {}): ContextT
 
 function dispatchFixture(kind: "local" | "cloud" | undefined, config = agentConfig()) {
   const registry = {
-    currentInstanceId: vi.fn(() => randomUUID()),
+    currentInstanceId: vi.fn<() => string | undefined>(() => randomUUID()),
     supportsCapability: vi.fn(() => true),
-    send: vi.fn(async () => undefined),
   };
-  const owner = new ContextTreeOperationOwner(registry as unknown as ConnectionRegistry);
-  const ownerStart = vi.spyOn(owner, "start").mockResolvedValue({ status: "completed", repository: "acme/memory" });
   const agents = {
     getConfigById: vi.fn(async () => config),
     updateContextTreeSelection: vi.fn(async () => config),
@@ -378,11 +373,43 @@ function dispatchFixture(kind: "local" | "cloud" | undefined, config = agentConf
     computerKind: vi.fn(async () => kind),
     run: vi.fn(async () => ({ status: "completed", repository: "acme/memory" }) as const),
   };
-  const service = new ContextTreeOperationService(agents, owner, cloud);
-  return { agents, cloud, owner, ownerStart, service };
+  const service = new ContextTreeOperationService(agents, registry, cloud);
+  return { agents, cloud, registry, service };
 }
 
-describe("ContextTreeOperationService Cloud dispatch", () => {
+describe("ContextTreeOperationService dispatch", () => {
+  it.each(["connect", "create"] as const)(
+    "rejects Server-backed Local %s before remote work on an unsupported runtime",
+    async (action) => {
+      const f = dispatchFixture("local");
+      f.registry.supportsCapability.mockReturnValue(false);
+      expect(await f.service.run(ACCOUNT, AGENT, request({ action }))).toEqual({
+        status: "failed",
+        code: "capability_missing",
+      });
+      expect(f.cloud.run).not.toHaveBeenCalled();
+      expect(f.agents.updateContextTreeSelection).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires an online Local runtime before Server-side verification", async () => {
+    const f = dispatchFixture("local");
+    f.registry.currentInstanceId.mockReturnValue(undefined);
+    expect(await f.service.run(ACCOUNT, AGENT, request())).toEqual({ status: "failed", code: "computer_unavailable" });
+    expect(f.cloud.run).not.toHaveBeenCalled();
+    expect(f.agents.updateContextTreeSelection).not.toHaveBeenCalled();
+  });
+
+  it("rechecks Local capabilities after remote verification before persisting a selection", async () => {
+    const f = dispatchFixture("local");
+    f.cloud.run.mockImplementationOnce(async () => {
+      f.registry.supportsCapability.mockReturnValue(false);
+      return { status: "completed", repository: "acme/memory" };
+    });
+    expect(await f.service.run(ACCOUNT, AGENT, request())).toEqual({ status: "failed", code: "capability_missing" });
+    expect(f.agents.updateContextTreeSelection).not.toHaveBeenCalled();
+  });
+
   it("runs Cloud connect Server-side and never through the Local WebSocket owner", async () => {
     const f = dispatchFixture("cloud");
     expect(await f.service.run(ACCOUNT, AGENT, request())).toEqual({
@@ -393,16 +420,16 @@ describe("ContextTreeOperationService Cloud dispatch", () => {
       accountId: ACCOUNT,
       agentId: AGENT,
       action: "connect",
-      alias: "memory",
+      path: ".",
+      ref: "main",
       repository: "Acme/Memory",
     });
-    expect(f.ownerStart).not.toHaveBeenCalled();
     // The Agent revision CAS commits the exact pre-dispatch fences.
     expect(f.agents.updateContextTreeSelection).toHaveBeenCalledWith(
       ACCOUNT,
       AGENT,
       { revision: 3, runtimeConfigRevision: 7, computerId: COMPUTER, status: "suspended" },
-      [{ alias: "memory", repository: "Acme/Memory" }],
+      [{ kind: "git" as const, path: ".", ref: "main", repository: "Acme/Memory" }],
     );
   });
 
@@ -412,13 +439,12 @@ describe("ContextTreeOperationService Cloud dispatch", () => {
     expect(f.cloud.run).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: ACCOUNT, agentId: AGENT, action: "connect" }),
     );
-    expect(f.ownerStart).not.toHaveBeenCalled();
   });
 
-  it("falls back to the Local path when the Computer kind is unknown", async () => {
+  it("rejects an unknown Computer before remote work", async () => {
     const f = dispatchFixture(undefined);
-    await f.service.run(ACCOUNT, AGENT, request());
-    expect(f.ownerStart).toHaveBeenCalledTimes(1);
+    expect(await f.service.run(ACCOUNT, AGENT, request())).toEqual({ status: "failed", code: "computer_unavailable" });
+    expect(f.agents.updateContextTreeSelection).not.toHaveBeenCalled();
     expect(f.cloud.run).not.toHaveBeenCalled();
   });
 
@@ -428,16 +454,15 @@ describe("ContextTreeOperationService Cloud dispatch", () => {
       agentConfig({
         runtimeConfig: {
           ...agentConfig().runtimeConfig,
-          contextTrees: [{ alias: "memory", repository: "acme/memory" }],
+          contextTrees: [{ kind: "git" as const, path: ".", ref: "main", repository: "acme/memory" }],
         },
       }),
     );
-    expect(await f.service.run(ACCOUNT, AGENT, request({ action: "disconnect", repository: null }))).toEqual({
+    expect(await f.service.run(ACCOUNT, AGENT, request({ action: "disconnect", repository: "acme/memory" }))).toEqual({
       status: "completed",
       repository: null,
     });
     expect(f.cloud.run).not.toHaveBeenCalled();
-    expect(f.ownerStart).not.toHaveBeenCalled();
     expect(f.agents.updateContextTreeSelection).toHaveBeenCalledWith(
       ACCOUNT,
       AGENT,
@@ -451,7 +476,10 @@ describe("ContextTreeOperationService Cloud dispatch", () => {
       "cloud",
       agentConfig({
         status: "active",
-        runtimeConfig: { ...agentConfig().runtimeConfig, contextTrees: [{ alias: "old", repository: "acme/old" }] },
+        runtimeConfig: {
+          ...agentConfig().runtimeConfig,
+          contextTrees: [{ kind: "git" as const, path: ".", ref: "main", repository: "acme/old" }],
+        },
       }),
     );
     expect(await paused.service.run(ACCOUNT, AGENT, request())).toEqual({ status: "failed", code: "pause_required" });
@@ -467,15 +495,17 @@ describe("ContextTreeOperationService Cloud dispatch", () => {
     });
   });
 
-  it("surfaces the Cloud create capability failure without a Session or Sandbox allocation", async () => {
-    const f = dispatchFixture("cloud");
-    f.cloud.run.mockResolvedValue({ status: "failed", code: "capability_missing" } as never);
-    expect(await f.service.run(ACCOUNT, AGENT, request({ action: "create" }))).toEqual({
-      status: "failed",
-      code: "capability_missing",
-    });
-    expect(f.ownerStart).not.toHaveBeenCalled();
-    expect(f.agents.updateContextTreeSelection).not.toHaveBeenCalled();
+  it.each(["local", "cloud"] as const)("creates for %s on the Server without Computer credentials", async (kind) => {
+    const f = dispatchFixture(kind);
+    const result = { status: "completed", repository: "acme/memory", ref: "trunk" } as const;
+    f.cloud.run.mockResolvedValue(result);
+    expect(await f.service.run(ACCOUNT, AGENT, request({ action: "create", ref: "HEAD" }))).toEqual(result);
+    expect(f.cloud.run).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: ACCOUNT, action: "create", ref: "HEAD" }),
+    );
+    expect(f.agents.updateContextTreeSelection).toHaveBeenCalledWith(ACCOUNT, AGENT, expect.any(Object), [
+      { kind: "git", repository: "Acme/Memory", path: ".", ref: "trunk" },
+    ]);
   });
 });
 
@@ -496,7 +526,7 @@ describe("Cloud Context Tree verification with the pinned CLI", () => {
   function localRemote(origin: string): PublicationRemote {
     return {
       async seed(repository, options: GitProcessOptions, allowedRefs?: readonly string[]) {
-        const refs = allowedRefs ?? ["refs/heads/master"];
+        const refs = allowedRefs ?? ["refs/heads/main"];
         await runTrustedProcess(
           "git",
           ["-C", repository, "fetch", "--no-tags", origin, ...refs.map((ref) => `+${ref}:${ref}`)],
@@ -524,8 +554,9 @@ describe("Cloud Context Tree verification with the pinned CLI", () => {
   function connected(origin: string, name = "memory") {
     const workspace = new GitWorkspace();
     const github = management(connection({ bindings: [binding({ fullNameDisplay: `acme/${name}` })] }));
-    const cloud = new CloudContextTreeOperations({
+    const cloud = new GitHubContextTreeOperations({
       management: github,
+      api: { createPrivateRepository: vi.fn(), initializeContextTree: vi.fn(), getRepository: vi.fn() },
       credentials: {
         acquire: vi.fn(async () => ({ token: "ghu_scoped_test_token", release: vi.fn(async () => undefined) })),
       },
@@ -559,9 +590,11 @@ describe("Cloud Context Tree verification with the pinned CLI", () => {
       dirname(createRequire(import.meta.url).resolve("@first-tree-ai/context-tree/package.json")),
       "dist/cli/index.mjs",
     );
-    tree = JSON.parse(
-      (await exec(process.execPath, [cli, "create", "--project-path", project, "--json"], { env: environment })).stdout,
-    ).treePath;
+    tree = join(root, "tree");
+    await exec(process.execPath, [cli, "init", tree, "--project-path", project, "--json"], { env: environment });
+    await git(tree, ["init", "--initial-branch=main"]);
+    await git(tree, ["add", "."]);
+    await git(tree, ["commit", "-m", "init"]);
   });
 
   afterEach(async () => {
@@ -578,6 +611,32 @@ describe("Cloud Context Tree verification with the pinned CLI", () => {
     expect(stagingRoot).toBeDefined();
     await cloud.close();
     expect(existsSync(stagingRoot as string)).toBe(false);
+  });
+
+  it("verifies a subtree on a selected branch despite unrelated repository symlinks", async () => {
+    await mkdir(join(tree, "docs"));
+    await git(tree, ["mv", "NODE.md", "docs/NODE.md"]);
+    await git(tree, ["checkout", "-b", "feature/docs"]);
+    await writeFile(join(tree, "code.txt"), "host code");
+    await symlink("code.txt", join(tree, "code-link"));
+    await git(tree, ["add", "."]);
+    await git(tree, ["commit", "-m", "docs subtree"]);
+    const { cloud } = connected(tree);
+    try {
+      expect(await cloud.run(runInput({ path: "docs", ref: "feature/docs" }))).toEqual({
+        status: "completed",
+        repository: "Acme/Memory",
+      });
+      await symlink("../code.txt", join(tree, "docs", "escape.md"));
+      await git(tree, ["add", "."]);
+      await git(tree, ["commit", "-m", "unsafe link"]);
+      expect(await cloud.run(runInput({ path: "docs", ref: "feature/docs" }))).toEqual({
+        status: "failed",
+        code: "invalid_tree",
+      });
+    } finally {
+      await cloud.close();
+    }
   });
 
   it("rejects a repository whose pinned head is not a valid Context Tree", async () => {
@@ -625,7 +684,7 @@ it("selects the exact requested binding among multiple Context Tree grants and r
   const github = management(row);
   const treeHeads = verifier();
   const cloud = operations(github, { treeHeads });
-  expect(await cloud.run(runInput({ alias: "product", repository: "acme/product" }))).toEqual({
+  expect(await cloud.run(runInput({ path: ".", ref: "main", repository: "acme/product" }))).toEqual({
     status: "completed",
     repository: "acme/product",
   });
@@ -646,7 +705,7 @@ it("does not accept another remaining Tree binding when the requested grant is r
     return "a".repeat(40);
   });
   const cloud = operations(github, { treeHeads });
-  expect(await cloud.run(runInput({ alias: "product", repository: "acme/product" }))).toEqual({
+  expect(await cloud.run(runInput({ path: ".", ref: "main", repository: "acme/product" }))).toEqual({
     status: "failed",
     code: "permission_denied",
   });
