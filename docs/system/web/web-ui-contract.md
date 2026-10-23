@@ -281,6 +281,16 @@ latest handoff result. When a handoff summary exists, its recorded outcome and s
 without opening the full task. The list uses its existing summary fields and does not fetch the private prompt
 until details are opened.
 
+The list stays in one card with divided rows and a count of loaded summaries; a plus indicates more pages.
+The schedule name opens a focused detail dialog, including when reached through the existing schedule deep link.
+The row action menu contains pause/resume and delete. A pending mutation prevents overlapping writes, while
+read-only details remain available. Deletion confirms the schedule and its impact, initially focuses Cancel,
+retains a refused operation inside the dialog, and returns focus to the section after a confirmed removal.
+Closing details returns focus to the name, or the section for a deep link without a surviving trigger.
+Switching Agents closes any open detail or confirmation. Failed list refreshes retain loaded rows and expose
+Retry. A failed initial read does not masquerade as an empty list. The empty state explains that schedules are
+created by asking the Agent in its existing chat; the page does not introduce a separate creation form.
+
 Details explain the recorded outcome and retain its reason code and next scheduled time. An accepted handoff
 confirms runtime receipt, never task completion. An unknown handoff may still be in flight or may already have started work; users check
 Tasks before starting it again. Unreachable and rejected handoffs direct users to the Agent's Computer status,

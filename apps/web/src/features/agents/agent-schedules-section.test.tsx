@@ -1,6 +1,6 @@
 import type { AgentSchedule, AgentScheduleListItem } from "@opentag/shared/browser";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, browserApi } from "../../api.js";
 import { AgentSchedulesSection, formatScheduleTime } from "./agent-schedules-section.js";
@@ -68,7 +68,7 @@ describe("AgentSchedulesSection", () => {
 
     mount();
     expect(await screen.findByText(`Latest handoff: ${label}`)).toBeTruthy();
-    expect(screen.getByText(formatScheduleTime(TIME, item.timezone))).toBeTruthy();
+    expect(screen.getByTitle(formatScheduleTime(TIME, item.timezone))).toBeTruthy();
     expect(screen.getByText("Enabled")).toBeTruthy();
     expect(screen.queryByText(item.prompt)).toBeNull();
     expect(detail).not.toHaveBeenCalled();
@@ -94,10 +94,10 @@ describe("AgentSchedulesSection", () => {
     vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
 
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Show details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
     expect(await screen.findByText(explanation)).toBeTruthy();
     expect(screen.getByText("runtime_not_ready")).toBeTruthy();
-    expect(screen.getByText("Next scheduled time", { exact: true })).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).getByText("Next scheduled time", { exact: true })).toBeTruthy();
     expect(screen.queryByText("The schedule will not retry this occurrence.") !== null).toBe(outcome !== "accepted");
   });
 
@@ -120,7 +120,7 @@ describe("AgentSchedulesSection", () => {
         ),
       ).toBeTruthy();
       expect(screen.queryByText("Enabled")).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+      fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
       expect(await screen.findByText("The schedule will not retry this occurrence.")).toBeTruthy();
       expect(screen.getByText("runtime_not_ready")).toBeTruthy();
       expect(screen.queryByText(/before the next scheduled time|Future occurrences/)).toBeNull();
@@ -151,7 +151,7 @@ describe("AgentSchedulesSection", () => {
     expect(detail).not.toHaveBeenCalled();
     expect(screen.queryByText(/Latest handoff:/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
     expect(await screen.findByText(item.prompt)).toBeTruthy();
     expect(screen.getByText(/feishu channel test-chat, thread test-thread/)).toBeTruthy();
     expect(detail).toHaveBeenCalledWith(AGENT_ID, SCHEDULE_ID);
@@ -164,7 +164,7 @@ describe("AgentSchedulesSection", () => {
 
     mount(SCHEDULE_ID);
     expect(await screen.findByText(item.prompt)).toBeTruthy();
-    expect(screen.getByText("Daily check")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Daily check" })).toBeTruthy();
   });
 
   it("shows an inaccessible old deep link without leaking task content", async () => {
@@ -188,12 +188,164 @@ describe("AgentSchedulesSection", () => {
 
     mount();
     expect(await screen.findByText("Daily check")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
     await waitFor(() => expect(pause).toHaveBeenCalledWith(AGENT_ID, SCHEDULE_ID, 3));
     expect(await screen.findByText("Paused")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith(AGENT_ID, SCHEDULE_ID, 4));
+  });
+
+  it("retries a failed first read without claiming the list is empty", async () => {
+    const item = schedule();
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockRejectedValueOnce(new Error("Unavailable"))
+      .mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+    mount();
+    expect(await screen.findByText("Schedules could not be loaded.")).toBeTruthy();
+    expect(screen.queryByText("No schedules for this Agent yet.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Daily check" })).toBeTruthy();
+  });
+
+  it("loads the next summary page without fetching either private task", async () => {
+    const first = schedule();
+    const second = schedule({ id: "next-page-schedule", name: "Weekly review" });
+    const list = vi
+      .spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(first)], nextCursor: "page-2" })
+      .mockResolvedValue({ items: [summaryOf(second)], nextCursor: null });
+    const detail = vi.spyOn(browserApi, "agentSchedule");
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("button", { name: "Weekly review" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Daily check" })).toBeTruthy();
+    expect(list).toHaveBeenLastCalledWith(AGENT_ID, { cursor: "page-2" });
+    expect(detail).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
+  it("preserves loaded summaries and offers recovery when the next page fails", async () => {
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: "page-2" })
+      .mockRejectedValue(new Error("Unavailable"));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    expect(await screen.findByText("Schedules could not be loaded.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Daily check" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("prevents overlapping mutations while keeping summary details available", async () => {
+    const current = schedule();
+    const paused = schedule({ enabled: false, nextTriggerAt: null, revision: 4 });
+    const second = schedule({ id: "second", name: "Weekly review" });
+    let finish!: (item: AgentSchedule) => void;
+    const pause = vi.spyOn(browserApi, "pauseAgentSchedule").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(current), summaryOf(second)], nextCursor: null })
+      .mockResolvedValue({ items: [summaryOf(paused), summaryOf(second)], nextCursor: null });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
+    expect((screen.getByRole("button", { name: "Actions for Weekly review" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "Daily check" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Weekly review" }));
+    expect(pause).toHaveBeenCalledOnce();
+    await act(async () => finish(paused));
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Actions for Weekly review" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+  });
+
+  it("keeps a refused delete open, defaults to Cancel and restores the menu trigger", async () => {
+    vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(schedule())], nextCursor: null });
+    vi.spyOn(browserApi, "deleteAgentSchedule").mockRejectedValue(new Error("Conflict"));
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for Daily check" });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const dialog = screen.getByRole("alertdialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByRole("alert")).toBeTruthy();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByRole("button", { name: "Daily check" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("returns focus to the section after deleting its last schedule", async () => {
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null });
+    vi.spyOn(browserApi, "deleteAgentSchedule").mockResolvedValue(undefined);
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Schedules" })));
+    expect(screen.queryByRole("button", { name: "Daily check" })).toBeNull();
+  });
+
+  it("closes a private detail when switching Agents and ignores its late result", async () => {
+    const item = schedule();
+    let finish!: (item: AgentSchedule) => void;
+    vi.spyOn(browserApi, "agentSchedules").mockImplementation(async (id) => ({
+      items: id === AGENT_ID ? [summaryOf(item)] : [],
+      nextCursor: null,
+    }));
+    vi.spyOn(browserApi, "agentSchedule").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AgentSchedulesSection agentId={AGENT_ID} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <AgentSchedulesSection agentId="another-agent" />
+      </QueryClientProvider>,
+    );
+    await act(async () => finish(item));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(item.prompt)).toBeNull();
+  });
+
+  it.each([
+    ["30 9 * * 1-5", "Weekdays at 9:30 AM"],
+    ["0 18 * * *", "Daily at 6:00 PM"],
+    ["0 9 * * 1", "Every Monday at 9:00 AM"],
+    ["0 9 1 * 1", "Cron: 0 9 1 * 1"],
+    ["*/15 9-17 * * 1-5", "Cron: */15 9-17 * * 1-5"],
+  ])("describes %s without guessing complex cron semantics", async (expression, label) => {
+    const item = schedule({ schedule: { kind: "cron", expression } });
+    vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+    vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
+    mount();
+    expect(
+      await screen.findByText((_, element) => element?.tagName === "P" && element.textContent === `Enabled · ${label}`),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
+    expect(await within(screen.getByRole("dialog")).findByText(`Cron: ${expression}`)).toBeTruthy();
   });
 });

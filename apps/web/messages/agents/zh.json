@@ -141,5 +141,11 @@
   "agents_status_temporarily_unavailable": "状态暂时不可用",
   "agents_status_unknown": "状态暂时不可用",
   "agents_title": "Agent",
-  "agents_view_skills": "查看技能"
+  "agents_view_skills": "查看技能",
+  "agents_schedules_actions": "{name}的操作",
+  "agents_schedules_empty_hint": "在聊天中让这个 Agent 安排定时任务，创建后会显示在这里。",
+  "agents_schedules_interval": "每 {interval}",
+  "agents_schedules_daily": "每天 {time}",
+  "agents_schedules_weekdays": "周一至周五 {time}",
+  "agents_schedules_weekly": "每{day} {time}"
 }
