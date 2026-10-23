@@ -29,7 +29,7 @@ openTag 是一个开源、多模型的 AI 同事。在 Slack 和飞书里，和�
 - **自带** Codex、Claude Code 或 Pi agent
 - **开源**、**可自托管**
 
-> 权威来源：[README.md](./README.md)　·　同步日期：2026-10-20
+> 权威来源：[README.md](./README.md)　·　同步日期：2026-10-23
 
 <p align="center">
   <a href="https://opentag.build/zh#how-it-works">
@@ -59,6 +59,18 @@ openTag 是一个开源、多模型的 AI 同事。在 Slack 和飞书里，和�
 
 完成剩余设置，将 openTag 添加到 Slack 或飞书，然后在频道或私信中给 Agent 发消息。
 Slack 的额外设置步骤见[配置指南](./docs/system/messaging/slack-app-setup.md)。
+
+### 试试第一个任务
+
+选一个带有 `README.md` 的小型本地项目。将下面的 `/absolute/path/to/your/project` 替换为这个项目在
+已连接电脑上的完整路径，然后把这条消息发给 Agent：
+
+> 阅读 /absolute/path/to/your/project 中的 README.md，在同一文件夹创建 FIRST_TASK.md。写一段项目简介、
+> README 中说明的配置步骤，以及它没有回答的三个问题。注明依据的 README 章节；缺少的说明请直接标明，不要猜测。
+> 不要修改其他文件，也不要执行配置命令。回复笔记的完整路径。如果无法访问这个文件夹，请说明缺少什么。
+
+用编辑器打开 `FIRST_TASK.md`，对照 README 核对项目简介和配置步骤。这样你就得到了一份可以检查和继续修改的小成果。
+接下来可以给出反馈，让 Agent 改进其中一个章节。
 
 ## 自托管与本地开发
 

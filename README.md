@@ -59,6 +59,19 @@ Keep this computer on while your agent is working.
 Finish the setup steps to add openTag to Slack or Lark, then send your agent a message in a channel or
 direct message. For Slack, see the [additional setup instructions](./docs/system/messaging/slack-app-setup.md).
 
+### Try your first task
+
+Start with a small local project that has a `README.md`. Replace `/absolute/path/to/your/project` below with its
+full path on the computer you connected, then send this message to your agent:
+
+> Read README.md in /absolute/path/to/your/project and create FIRST_TASK.md in the same folder. Include a brief
+> project overview, the setup steps the README describes, and three questions it leaves unanswered. Cite the README
+> headings you used; mark missing instructions instead of guessing. Do not change any other files or run setup
+> commands. Reply with the full path to the note. If you cannot access the folder, tell me what is missing.
+
+Open `FIRST_TASK.md` in your editor and check its overview and setup steps against the README. You now have a small
+work sample you can inspect and refine. For a follow-up, ask the agent to improve one section with your feedback.
+
 ## Self-hosting and local development
 
 openTag is open source and self-hostable. To run the server locally from a checkout, follow

@@ -1,0 +1,22 @@
+{
+  "observedAt": "2026-10-23T06:50:13.383920+00:00",
+  "execution": "Current gan Session read the real checkout README and wrote FIRST_TASK.md using file tools; no extra model invocation or fresh IM Session",
+  "source": "README.md",
+  "sourceSha256": "c4692ee4abf5ae7c2922a2c98fbbaa732b90f3dd028a0adda935e42a5fee1045",
+  "output": "FIRST_TASK.md",
+  "outputSha256": "e1fa580f2d1f24f8260999328627113050bdfbacf82800f5ca32e5f1f578e3b2",
+  "review": {
+    "overview": "Matches About: open source, self-hostable, local computer, Slack/Lark and three Runtimes",
+    "setup": "Matches Quick Start; no invented connect command; Pi version preserved",
+    "unansweredQuestions": 3,
+    "sourceHeadingsPresent": true,
+    "setupCommandsRun": false,
+    "liveAgentMutation": false
+  },
+  "limitations": [
+    "One author-context execution, not an independent new-user test",
+    "English task executed; Chinese mirror reviewed for meaning, not separately executed",
+    "No conversion, latency or reliability effect measured",
+    "No live Slack/Lark onboarding or provider authentication exercised"
+  ]
+}
