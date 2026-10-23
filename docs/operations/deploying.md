@@ -125,6 +125,9 @@ server container.
 | `OPENTAG_PUBLIC_URL` | The App's HTTPS URL; hosted environments reject plain HTTP |
 | `OPENTAG_WEBSITE_ORIGINS` | Optional; comma-separated website origins added to the built-in official origins for the public catalog APIs; loopback HTTP is allowed for local website development |
 | `OPENTAG_DATABASE_URL` | `postgresql://…` for the Staging database |
+| `OPENTAG_DATABASE_STATEMENT_TIMEOUT_MS` | Optional; defaults to `30000`; PostgreSQL `statement_timeout` for every pool connection |
+| `OPENTAG_DATABASE_QUERY_TIMEOUT_MS` | Optional; defaults to `35000`; client-side deadline per query, must be greater than the statement timeout |
+| `OPENTAG_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | Optional; defaults to `60000`; PostgreSQL `idle_in_transaction_session_timeout` |
 | `BETTER_AUTH_SECRET` | At least 32 random characters, unique to Staging; signs every Account session |
 | `OPENTAG_JWT_SECRET` | At least 32 random characters, unique to Staging and distinct from `BETTER_AUTH_SECRET`; signs Slack OAuth state only |
 | `OPENTAG_ENCRYPTION_KEY` | Base64 32-byte key, unique to Staging |
@@ -138,6 +141,11 @@ server container.
 The two optional variables control how the Server learns the exact channel latest target it advertises to connected
 Clients for automatic upgrades: it polls the channel's published `latest.json` under the download base URL and keeps
 advertising the last known target through any outage. The dev channel never advertises a target.
+
+The statement and idle-in-transaction bounds reach PostgreSQL as startup parameters on every pool connection. A
+self-hosted connection pooler in front of PostgreSQL must therefore list `statement_timeout` and
+`idle_in_transaction_session_timeout` in its `ignore_startup_parameters`; otherwise it rejects the connection with
+`unsupported startup parameter`.
 
 Enable HTTPS and force HTTPS on the App before setting `OPENTAG_PUBLIC_URL`; the server refuses to start in a hosted
 environment whose public URL is not HTTPS. Staging secrets must not be shared with any other environment.
