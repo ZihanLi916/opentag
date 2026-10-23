@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fix/prod-database-hotfix-20261023
     tags:
       - "v*"
   pull_request:
@@ -245,7 +246,7 @@ jobs:
   reconcile-edge:
     name: Reconcile Edge
     needs: build
-    if: github.repository == 'first-tree-ai/opentag' && github.event_name == 'push' && github.ref_type == 'branch'
+    if: github.repository == 'first-tree-ai/opentag' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # `edge` has its own writer. Sharing a group with the release pointer would let a branch run
     # cancel a pending release-pointer run, which would then never move its own pointer.

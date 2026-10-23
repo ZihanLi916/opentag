@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - fix/prod-database-hotfix-20261023
   workflow_dispatch:
 
 concurrency:
@@ -830,6 +831,10 @@ jobs:
               ;;
             push) base_sha="$PUSH_BEFORE" ;;
           esac
+          if [ "$GITHUB_REF" = "refs/heads/fix/prod-database-hotfix-20261023" ]; then
+            base_sha="d70d270abb7e36a85c4ce16240f0f78d6007b85b"
+            git merge-base --is-ancestor "$base_sha" "$head_sha"
+          fi
           # A branch's first push and a force push both leave a base that is not reachable
           # here; scanning the full history of the head is the safe reading of that range.
           if [ -n "$base_sha" ] && ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
