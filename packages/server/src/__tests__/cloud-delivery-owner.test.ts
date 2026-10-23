@@ -1097,6 +1097,259 @@ describe("CloudDeliveryOwner", () => {
     expect((await deliveryRow(presentDelivery.deliveryId)).reportedAt).toBeNull();
   });
 
+  it("settles an unreported accepted turn once no report can still be truthful", async () => {
+    const expiredWindow = await cloudScope();
+    const expiredOwner = makeOwner({
+      allocationStatus: async () => ({
+        scope: expiredWindow.scope,
+        lifecycle: "ready",
+        resourceUid: `unit-uid-${expiredWindow.sandbox.sandboxId.slice(0, 8)}`,
+        physical: "present",
+      }),
+    });
+    const expiredSent: RunnerServerFrame[] = [];
+    attachReady(expiredOwner.hub, expiredOwner.fence, expiredWindow.scope, expiredSent, expiredWindow.cloud.computerId);
+    const expiredDelivery = await dispatchAndAccept({
+      owner: expiredOwner.owner,
+      fence: expiredOwner.fence,
+      scope: expiredWindow.scope,
+      agentId: expiredWindow.agent.id,
+      computerId: expiredWindow.cloud.computerId,
+    });
+    expiredOwner.owner.detachConnection(expiredDelivery.connection.connectionId);
+    const frozen = expiredDelivery.request as DirectImMessageDeliveryRequest;
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({ dispatchPayload: { ...frozen, deadlineAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString() } })
+      .where(eq(imMessageDeliveries.id, expiredDelivery.deliveryId));
+
+    expect(await expiredOwner.owner.recoverAccepted(expiredDelivery.deliveryId)).toBe("resolved");
+    expect((await deliveryRow(expiredDelivery.deliveryId)).turnReport).toMatchObject({
+      outcome: "unknown",
+      errorReason: "turn_state_unknown",
+    });
+
+    // A dispatch without a frozen deadline is bounded by the platform maximum runtime instead.
+    const unbounded = await cloudScope();
+    const unboundedOwner = makeOwner({
+      allocationStatus: async () => ({
+        scope: unbounded.scope,
+        lifecycle: "ready",
+        resourceUid: `unit-uid-${unbounded.sandbox.sandboxId.slice(0, 8)}`,
+        physical: "present",
+      }),
+    });
+    const unboundedSent: RunnerServerFrame[] = [];
+    attachReady(unboundedOwner.hub, unboundedOwner.fence, unbounded.scope, unboundedSent, unbounded.cloud.computerId);
+    const unboundedDelivery = await dispatchAndAccept({
+      owner: unboundedOwner.owner,
+      fence: unboundedOwner.fence,
+      scope: unbounded.scope,
+      agentId: unbounded.agent.id,
+      computerId: unbounded.cloud.computerId,
+    });
+    unboundedOwner.owner.detachConnection(unboundedDelivery.connection.connectionId);
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({
+        dispatchPayload: null,
+        acceptedAt: new Date(Date.now() - 26 * 60 * 60 * 1_000),
+      })
+      .where(eq(imMessageDeliveries.id, unboundedDelivery.deliveryId));
+
+    expect(await unboundedOwner.owner.recoverAccepted(unboundedDelivery.deliveryId)).toBe("resolved");
+  });
+
+  it("records the journaled report that a live `reported` answer replays, even past the cutoff", async () => {
+    const { scope, agent, cloud } = await cloudScope();
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const { hub, fence, owner } = makeOwner({ logger });
+    const sent: RunnerServerFrame[] = [];
+    const { socket, connection } = attachReady(hub, fence, scope, sent, cloud.computerId);
+    const { deliveryId, request, turnId } = await dispatchAndAccept({
+      owner,
+      fence,
+      scope,
+      agentId: agent.id,
+      computerId: cloud.computerId,
+    });
+    const frozen = request as DirectImMessageDeliveryRequest;
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({ dispatchPayload: { ...frozen, deadlineAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString() } })
+      .where(eq(imMessageDeliveries.id, deliveryId));
+
+    // The real Runner sends the query answer and then replays the journaled report on the same
+    // socket (`cloud-turns.ts:handleQuery`), so the answer proves a report is imminent.
+    let finishReplay: () => void = () => undefined;
+    const replayed = new Promise<void>((resolve) => (finishReplay = resolve));
+    const send = socket.send.bind(socket);
+    socket.send = (frame) => {
+      send(frame);
+      if (frame.type !== "delivery:query") return;
+      setImmediate(() => {
+        owner.handleQueryResult(connection, { requestId: frame.requestId, phase: "reported" });
+        // The replay is written after the answer, exactly as the Runner queues both frames.
+        setImmediate(() => {
+          void owner
+            .handleDeliveryReport(connection, { requestId: randomUUID(), report: turnReport(frozen, turnId) })
+            .then(finishReplay, finishReplay);
+        });
+      });
+    };
+
+    // Settling here would make the replay fail with `conflict` and lose the authentic outcome.
+    await expect(owner.recoverAccepted(deliveryId)).resolves.toBe("pending");
+    await replayed;
+    const recorded = await deliveryRow(deliveryId);
+    expect(recorded.turnReport).toMatchObject({ outcome: "completed", executionEffects: "completed" });
+    expect(recorded.reportedAt).not.toBeNull();
+    const acks = sent.filter((frame) => frame.type === "delivery:report:ack");
+    expect(acks.at(-1)).toMatchObject({ status: "recorded" });
+    expect(acks.some((frame) => (frame as { status?: string }).status === "conflict")).toBe(false);
+    // The overdue replay is visible for the report path instead of being covered by a settlement.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "CLOUD_DELIVERY_REPORT_REPLAY_OVERDUE", deliveryId, phase: "reported" }),
+      expect.any(String),
+    );
+  });
+
+  it("refuses a late authentic report after the acceptance cutoff and keeps the terminal unknown", async () => {
+    const { scope, agent, cloud } = await cloudScope();
+    const { hub, fence, owner } = makeOwner();
+    const sent: RunnerServerFrame[] = [];
+    const { connection } = attachReady(hub, fence, scope, sent, cloud.computerId);
+    const { deliveryId, request, turnId } = await dispatchAndAccept({
+      owner,
+      fence,
+      scope,
+      agentId: agent.id,
+      computerId: cloud.computerId,
+    });
+    // A child steered into this turn while it was live.
+    const child = await pendingDelivery({ sessionId: scope.sessionId });
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({
+        state: "steered",
+        steerTargetDeliveryId: deliveryId,
+        inputHash: "steered-child-input-hash",
+        steeredAt: new Date(),
+      })
+      .where(eq(imMessageDeliveries.id, child.deliveryId));
+
+    const frozen = request as DirectImMessageDeliveryRequest;
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({ dispatchPayload: { ...frozen, deadlineAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString() } })
+      .where(eq(imMessageDeliveries.id, deliveryId));
+    owner.detachConnection(connection.connectionId);
+
+    // The accepted cutoff: no live connection, an inconclusive probe, the window plus grace passed.
+    await expect(owner.recoverAccepted(deliveryId)).resolves.toBe("resolved");
+    const settled = await deliveryRow(deliveryId);
+    expect(settled.turnReport).toMatchObject({ outcome: "unknown", errorReason: "turn_state_unknown" });
+    // The `unknown` settlement returns the steered child to the queue; a late report cannot undo it.
+    expect((await deliveryRow(child.deliveryId)).state).toBe("pending");
+
+    // The authentic report still arrives and is authenticated by this exact allocation, but the
+    // cutoff is the acceptance boundary: it gets `conflict` and cannot replace the terminal hash.
+    const reattached = attachReady(hub, fence, scope, sent, cloud.computerId);
+    await owner.handleDeliveryReport(reattached.connection, {
+      requestId: randomUUID(),
+      report: turnReport(frozen, turnId),
+    });
+    const after = await deliveryRow(deliveryId);
+    expect(after.turnReport).toMatchObject({ outcome: "unknown" });
+    expect(after.resultHash).toBe(settled.resultHash);
+    expect(sent.filter((frame) => frame.type === "delivery:report:ack").at(-1)).toMatchObject({ status: "conflict" });
+    expect((await deliveryRow(child.deliveryId)).state).toBe("pending");
+  });
+
+  it("queries an exact Runner that reconnects while the absent probe is pending", async () => {
+    const { scope, agent, cloud } = await cloudScope();
+    let releaseProbe: () => void = () => undefined;
+    let probePending: () => void = () => undefined;
+    const probeGate = new Promise<void>((resolve) => (releaseProbe = resolve));
+    const probeEntered = new Promise<void>((resolve) => (probePending = resolve));
+    const { hub, fence, owner } = makeOwner({
+      allocationStatus: async () => {
+        probePending();
+        await probeGate;
+        return {
+          scope,
+          lifecycle: "ready" as const,
+          resourceUid: `unit-uid-${scope.sandboxId.slice(0, 8)}`,
+          physical: "present" as const,
+        };
+      },
+    });
+    const sent: RunnerServerFrame[] = [];
+    const first = attachReady(hub, fence, scope, sent, cloud.computerId);
+    const { deliveryId, request, turnId } = await dispatchAndAccept({
+      owner,
+      fence,
+      scope,
+      agentId: agent.id,
+      computerId: cloud.computerId,
+    });
+    // A child steered into the turn while it was live: a genuine completion must not requeue it.
+    const child = await pendingDelivery({ sessionId: scope.sessionId });
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({
+        state: "steered",
+        steerTargetDeliveryId: deliveryId,
+        inputHash: "steered-child-input-hash",
+        steeredAt: new Date(),
+      })
+      .where(eq(imMessageDeliveries.id, child.deliveryId));
+
+    const frozen = request as DirectImMessageDeliveryRequest;
+    await unit.database
+      .update(imMessageDeliveries)
+      .set({ dispatchPayload: { ...frozen, deadlineAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString() } })
+      .where(eq(imMessageDeliveries.id, deliveryId));
+    // Disconnect first, so recovery reaches the absent probe with no live owner.
+    owner.detachConnection(first.connection.connectionId);
+    const recovering = owner.recoverAccepted(deliveryId);
+    await probeEntered;
+
+    // The same allocation reconnects while the probe is pending, and answers like the real Client:
+    // the query answer first, then the journaled report on the same socket.
+    let finishReplay: () => void = () => undefined;
+    const replayed = new Promise<void>((resolve) => (finishReplay = resolve));
+    const reattached = attachReady(hub, fence, scope, sent, cloud.computerId);
+    const send = reattached.socket.send.bind(reattached.socket);
+    reattached.socket.send = (frame) => {
+      send(frame);
+      if (frame.type !== "delivery:query") return;
+      setImmediate(() => {
+        owner.handleQueryResult(reattached.connection, { requestId: frame.requestId, phase: "reported" });
+        setImmediate(() => {
+          void owner
+            .handleDeliveryReport(reattached.connection, {
+              requestId: randomUUID(),
+              report: turnReport(frozen, turnId),
+            })
+            .then(finishReplay, finishReplay);
+        });
+      });
+    };
+    releaseProbe();
+
+    // The probe's `present` answer plus the reconnected exact owner fence the offline timeout: the
+    // turn stays pending, the now-current Runner is queried, and its real report is recorded.
+    await expect(recovering).resolves.toBe("pending");
+    expect(sent.some((frame) => frame.type === "delivery:query")).toBe(true);
+    await replayed;
+    const recorded = await deliveryRow(deliveryId);
+    expect(recorded.turnReport).toMatchObject({ outcome: "completed", executionEffects: "completed" });
+    expect(sent.filter((frame) => frame.type === "delivery:report:ack").at(-1)).toMatchObject({ status: "recorded" });
+    expect(sent.some((frame) => (frame as { status?: string }).status === "conflict")).toBe(false);
+    expect((await deliveryRow(child.deliveryId)).state).toBe("steered");
+  });
+
   it("keeps a releasing allocation recoverable and records the real report instead of unknown", async () => {
     const { scope, agent, cloud } = await cloudScope();
     const { hub, fence, owner } = makeOwner();
