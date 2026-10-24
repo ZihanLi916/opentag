@@ -40,8 +40,10 @@ openTag does not submit approvals or require the connecting user to be an admini
 
 The Server checks automatically. “Check latest status” uses the same due-time and concurrency
 limits; it does not create another App, bypass approval, or force repeated provider calls.
-“Cancel connection” explicitly removes the pending authorization. Closing a saved-authorization
-dialog preserves it. The QR stage retains its short-lived registration behavior.
+“Cancel connection” explicitly removes the pending authorization and, for an attempt that never
+activated, ends the binding row with it, so both channel choices return. Closing a
+saved-authorization dialog preserves it. The QR stage retains its short-lived
+registration behavior.
 
 A new connection becomes usable only after full permission, identity, App and Runtime checks
 and the existing activation transaction succeed. A previously healthy connection may continue
@@ -72,6 +74,28 @@ with an encrypted candidate and no owner. An admitted check claims it as `valida
 A recoverable result returns it to `pending_activation`; a successful activation or terminal
 result clears temporary credential material. Cancel, disable and expiry also clear it.
 
+A terminal attempt leaves its `setup_state` on the row. When the attempt never activated the
+binding, settling it also ends the row in the same transaction: `status` becomes `disabled`,
+`disabled_at` is stamped, and the setup owner, context, deadline and any connection lease are
+cleared. That releases the Agent's single current-binding row and the Provider and App uniqueness
+entries it held (`im_bindings_agent_current_unique`, `im_bindings_feishu_app_current_unique`), so
+no reader can still see a connection, the next attempt inserts a fresh row, and the other Provider
+can configure. Cancel, expiry and failure all settle this way, and none of them emits the teardown
+that disconnecting a live connection emits, because no credential was ever issued.
+
+`active` bindings are exempt: the release matches only rows with no `activated_at` and no issued
+credential, so a reauthorization attempt that ends terminal keeps the working connection, its
+credential and its generation.
+
+Rows a previous binary left in that shape are reconciled too, in two places. The
+`0068_release_terminal_setup_slots` migration applies the same release to every existing
+`provisioning` row whose setup state is already terminal, so an upgraded deployment needs no
+operator action for an Agent that issue #504 already stranded. A row an older binary writes *after*
+the migration ran is released by the next writer that needs the slot: the Slack configuration
+transaction releases it under the lock it already holds, before its own insert. The current-binding
+read guard (`currentBindingOf`) remains the belt-and-braces answer for both, and Slack's
+configuration reads use it, so such a row never reports `IM_BINDING_UNBIND_REQUIRED`.
+
 A candidate is retained for a fixed 30 days, independently of QR expiry. Repeated checks
 do not extend this deadline. The retention is not a deployment setting; only tests inject a
 different value. Expired or irrecoverably invalid credentials require another
@@ -86,7 +110,7 @@ The existing credential cipher supports both v1 ciphertext and v2 with context A
 candidate's embedded identity checks remain necessary with v1. This feature does not change
 the global encryption write version or re-encrypt existing credentials.
 
-### Minimal database migration
+### Minimal database migration for `pending_activation`
 
 - Append `pending_activation` to `feishu_setup_state`.
 - Extend `im_bindings_setup_owner_shape` for an ownerless, non-disabled Feishu candidate
@@ -96,6 +120,20 @@ the global encryption write version or re-encrypt existing credentials.
 
 The encrypted JSON extension is still a data-contract change. PostgreSQL cannot validate
 the decrypted shape; service-level schema and identity checks are required.
+
+### Data migration `0068_release_terminal_setup_slots`
+
+This one does rewrite existing rows, so the "no customer-data backfill" statement above applies
+only to the `pending_activation` migration. `0068` adds no table, column or index and runs a single
+`UPDATE` that disables the rows described above: `provisioning`, terminal setup state, no
+`activated_at`, no issued credential. It clears the setup owner, context and expiry and the
+connection lease, and keeps each row's `setup_state`, `last_error_code` and
+`credential_generation`. An upgraded deployment needs no operator action for an Agent that issue
+#504 already stranded.
+
+For a rollback, the update is data rather than schema: reversing the migration file does not
+re-enable the rows, and a deployment that reverts the release behaviour while keeping this
+migration applied still reports those Agents as disconnected, with both channel choices offered.
 
 ## Recovery and concurrency
 
