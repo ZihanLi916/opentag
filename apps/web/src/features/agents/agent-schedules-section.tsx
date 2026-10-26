@@ -10,7 +10,7 @@ import { ApiError, browserApi } from "../../api.js";
 import { intlLocale } from "../../i18n/locale.js";
 import * as m from "../../paraglide/messages.js";
 import { queryKeys } from "../../query/keys.js";
-import { Banner, Button, Dialog, DropdownMenu, Icon, SkeletonLine, Text } from "../../ui/design-system.js";
+import { Banner, Button, Collapsible, Dialog, DropdownMenu, Icon, SkeletonLine, Text } from "../../ui/design-system.js";
 
 /** Account management for schedules pinned to this Agent's existing IM conversations. */
 export function AgentSchedulesSection({ agentId, scheduleId }: { agentId: string; scheduleId?: string }) {
@@ -28,6 +28,11 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
   const deleteReturnFocus = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const mutationInFlight = useRef(false);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => setExpandedId(scheduleId), [scheduleId]);
 
@@ -139,7 +144,7 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
       className="grid gap-4 ui-surface bg-kumo-base p-6 max-[640px]:p-5 ring ring-kumo-line"
       aria-label={m.agents_schedules_title()}
     >
-      <ScheduleHeader headingRef={headingRef} count={rows.length} hasMore={Boolean(list.hasNextPage)} />
+      <ScheduleHeader headingRef={headingRef} />
       {mutationError && !deleteTarget ? (
         <Banner variant="error" role="alert">
           {mutationError}
@@ -154,6 +159,7 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
       />
       <ScheduleList
         rows={rows}
+        now={now}
         pendingId={pendingId}
         onOpen={(id, trigger) => {
           detailReturnFocus.current = trigger;
@@ -176,7 +182,7 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
         }}
         returnFocusRef={detailReturnFocus}
       >
-        <ScheduleRowDetails detail={detail} onRetry={() => void detail.refetch()} />
+        <ScheduleRowDetails now={now} detail={detail} onRetry={() => void detail.refetch()} />
       </Dialog>
       {list.hasNextPage ? (
         <Button
@@ -247,32 +253,17 @@ function ScheduleListState({
   );
 }
 
-function ScheduleHeader({
-  headingRef,
-  count,
-  hasMore,
-}: {
-  headingRef: RefObject<HTMLHeadingElement | null>;
-  count: number;
-  hasMore: boolean;
-}) {
+function ScheduleHeader({ headingRef }: { headingRef: RefObject<HTMLHeadingElement | null> }) {
   return (
-    <header className="flex items-center justify-between gap-4">
-      <Text as="h2" ref={headingRef} tabIndex={-1} size="lg" variant="heading">
-        {m.agents_schedules_title()}
-      </Text>
-      {count ? (
-        <span className="text-sm tabular-nums text-kumo-subtle">
-          <span aria-hidden="true">{`${count}${hasMore ? "+" : ""}`}</span>
-          <span className="sr-only">{m.agents_schedules_loaded_count({ count: `${count}${hasMore ? "+" : ""}` })}</span>
-        </span>
-      ) : null}
-    </header>
+    <Text as="h2" ref={headingRef} tabIndex={-1} size="lg" variant="heading">
+      {m.agents_schedules_title()}
+    </Text>
   );
 }
 
 interface ScheduleListProps {
   rows: AgentScheduleListItem[];
+  now: number;
   pendingId?: string;
   onOpen: (id: string, trigger: HTMLElement) => void;
   onChange: (item: AgentScheduleListItem) => void;
@@ -292,6 +283,7 @@ function ScheduleList(props: ScheduleListProps) {
 
 function ScheduleRow({
   item,
+  now,
   pendingId,
   onOpen,
   onChange,
@@ -307,61 +299,52 @@ function ScheduleRow({
     wasPending.current = pending;
   }, [pending]);
   return (
-    <li
-      aria-busy={pending}
-      className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3 py-5 first:pt-0 last:pb-0 @min-[42rem]/content:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)_auto]"
-    >
-      <div className="grid min-w-0 gap-2">
-        <Button
-          variant="ghost"
-          size="compact"
-          aria-haspopup="dialog"
-          onClick={(event) => onOpen(item.id, event.currentTarget)}
-          className="group h-auto min-h-8 w-fit max-w-full justify-start whitespace-normal px-0! py-1! text-left"
-        >
-          <span className="line-clamp-2 wrap-anywhere text-sm font-medium">{item.name}</span>
-          <Icon
-            name="chevron-right"
-            className="mt-0.5 size-4 shrink-0 text-kumo-subtle transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+    <li aria-busy={pending} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-3 first:pt-0 last:pb-0">
+      <div className="grid min-w-0 gap-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            role="img"
+            aria-label={scheduleStatus(item)}
+            title={scheduleStatus(item)}
+            className={`size-1.5 shrink-0 rounded-full ${item.enabled && item.nextTriggerAt ? "bg-kumo-brand" : "bg-kumo-inactive"}`}
           />
-        </Button>
-        <p className="text-sm text-kumo-subtle">
-          <span>{scheduleStatus(item)}</span> <span aria-hidden="true">·</span>{" "}
-          {scheduleRule(item.schedule, item.timezone)}
-        </p>
-        {item.lastDispatch ? (
-          <p
-            className={`wrap-anywhere text-sm ${item.lastDispatch.outcome === "unreachable" || item.lastDispatch.outcome === "rejected" ? "text-kumo-danger" : "text-kumo-subtle"}`}
+          <Button
+            variant="ghost"
+            size="compact"
+            aria-haspopup="dialog"
+            onClick={(event) => onOpen(item.id, event.currentTarget)}
+            className="group h-auto min-h-6 w-fit max-w-full justify-start whitespace-normal px-0! py-0! text-left"
           >
-            <span>
-              {m.agents_schedules_last_dispatch()}: {handoffOutcome(item.lastDispatch.outcome)}
-            </span>
-            {" · "}
-            <time
-              dateTime={item.lastDispatch.scheduledFor}
-              title={formatScheduleTime(item.lastDispatch.scheduledFor, item.timezone)}
-            >
-              <span aria-hidden="true">{formatSchedulePreviewTime(item.lastDispatch.scheduledFor, item.timezone)}</span>
-              <span className="sr-only">{formatScheduleTime(item.lastDispatch.scheduledFor, item.timezone)}</span>
-            </time>
-          </p>
+            <span className="line-clamp-2 wrap-anywhere text-sm font-medium">{item.name}</span>
+            <Icon name="chevron-right" className="size-3.5 shrink-0 text-kumo-subtle" />
+          </Button>
+        </div>
+        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-3.5 text-xs text-kumo-subtle">
+          {!item.enabled || !item.nextTriggerAt ? <span>{scheduleStatus(item)}</span> : null}
+          <span>{scheduleRule(item.schedule, item.timezone)}</span>
+          {item.nextTriggerAt ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <time dateTime={item.nextTriggerAt} title={formatScheduleTime(item.nextTriggerAt, item.timezone)}>
+                {nextScheduleLabel(item.nextTriggerAt, now)}
+              </time>
+            </>
+          ) : null}
+        </p>
+        {item.lastDispatch && item.lastDispatch.outcome !== "accepted" ? (
+          <Button
+            variant="inline"
+            size="compact"
+            onClick={(event) => onOpen(item.id, event.currentTarget)}
+            className="h-auto! min-h-0! w-fit max-w-full justify-start whitespace-normal py-0! pl-3.5! text-left text-xs! text-kumo-danger!"
+            title={formatScheduleTime(item.lastDispatch.scheduledFor, item.timezone)}
+          >
+            {dispatchWarning(item.lastDispatch.outcome)} ·{" "}
+            {formatScheduleRelative(item.lastDispatch.attemptedAt ?? item.lastDispatch.scheduledFor, now)}
+          </Button>
         ) : null}
       </div>
-      {item.nextTriggerAt ? (
-        <div className="col-start-1 row-start-2 grid gap-1 @min-[42rem]/content:col-start-2 @min-[42rem]/content:row-start-1">
-          <span className="text-xs text-kumo-subtle">{m.agents_schedules_next()}</span>
-          <time
-            dateTime={item.nextTriggerAt}
-            title={formatScheduleTime(item.nextTriggerAt, item.timezone)}
-            className="text-sm tabular-nums text-kumo-strong"
-          >
-            <span aria-hidden="true">{formatSchedulePreviewTime(item.nextTriggerAt, item.timezone)}</span>
-            <span className="sr-only">{formatScheduleTime(item.nextTriggerAt, item.timezone)}</span>
-          </time>
-          <span className="text-xs text-kumo-subtle">{item.timezone}</span>
-        </div>
-      ) : null}
-      <div className="col-start-2 row-start-1 @min-[42rem]/content:col-start-3">
+      <div>
         <DropdownMenu>
           <DropdownMenu.Trigger
             render={
@@ -394,8 +377,10 @@ function ScheduleRow({
 
 function ScheduleRowDetails({
   detail,
+  now,
   onRetry,
 }: {
+  now: number;
   detail: { isPending: boolean; isError: boolean; error: Error | null; data?: AgentSchedule };
   onRetry: () => void;
 }) {
@@ -416,7 +401,7 @@ function ScheduleRowDetails({
       </div>
     );
   }
-  return detail.data ? <ScheduleDetail schedule={detail.data} /> : null;
+  return detail.data ? <ScheduleDetail schedule={detail.data} now={now} /> : null;
 }
 
 function ScheduleDeleteDialog({
@@ -489,7 +474,7 @@ function scheduleStatus(schedule: AgentScheduleListItem): string {
 }
 
 function scheduleRule(rule: AgentScheduleRule, timezone: string): string {
-  if (rule.kind === "at") return m.agents_schedules_at({ time: formatScheduleTime(rule.at, timezone) });
+  if (rule.kind === "at") return m.agents_schedules_at({ time: formatSchedulePreviewTime(rule.at, timezone) });
   if (rule.kind === "every") {
     const seconds = rule.intervalSeconds;
     if (seconds % 60 !== 0) return m.agents_schedules_every({ seconds: String(seconds) });
@@ -545,72 +530,145 @@ function ScheduleLoading() {
 export function formatScheduleTime(instant: string, timezone: string): string {
   const formatted = new Intl.DateTimeFormat(intlLocale(), {
     dateStyle: "medium",
-    timeStyle: "long",
+    timeStyle: "short",
     timeZone: timezone,
   }).format(new Date(instant));
   return `${formatted} (${timezone})`;
 }
 
-function ScheduleDetail({ schedule }: { schedule: AgentSchedule }) {
+function ScheduleDetail({ schedule, now }: { schedule: AgentSchedule; now: number }) {
   const last = schedule.lastDispatch;
   const target = schedule.target;
+  const provider = target.provider === "feishu" ? "Feishu" : "Slack";
   const targetLabel =
     target.sessionKind === "thread" && target.threadKey
-      ? m.agents_schedules_target_thread({
-          provider: target.provider,
-          channel: target.channelId,
-          thread: target.threadKey,
-        })
-      : m.agents_schedules_target_channel({ provider: target.provider, channel: target.channelId });
-  const outcome = last ? handoffOutcome(last.outcome) : m.agents_schedules_no_dispatch();
+      ? m.agents_schedules_destination_thread({ provider })
+      : m.agents_schedules_destination_conversation({ provider });
   return (
-    <div className="grid gap-6 text-sm">
-      <section className="grid gap-3">
-        <Text as="h3" variant="heading" size="lg" headingSize="body">
-          {m.agents_schedules_prompt()}
-        </Text>
-        <p className="whitespace-pre-wrap wrap-anywhere leading-relaxed text-kumo-default">{schedule.prompt}</p>
-      </section>
-      <dl className="grid gap-4 border-t border-kumo-line pt-5">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5 pb-2 text-sm">
+      <ScheduleInstructions key={schedule.id} prompt={schedule.prompt} id={`${schedule.id}-instructions`} />
+      <dl className="grid gap-4 border-t border-kumo-line pt-4">
         <DetailRow
           label={m.agents_schedules_rule()}
-          value={
-            schedule.schedule.kind === "cron"
-              ? m.agents_schedules_cron({ expression: schedule.schedule.expression })
-              : scheduleRule(schedule.schedule, schedule.timezone)
-          }
+          value={`${scheduleRule(schedule.schedule, schedule.timezone)} · ${schedule.timezone}`}
         />
-        <DetailRow label={m.agents_schedules_timezone()} value={schedule.timezone} />
-        <DetailRow label={m.agents_schedules_target()} value={targetLabel} />
         <DetailRow
           label={m.agents_schedules_next()}
-          value={schedule.nextTriggerAt ? formatScheduleTime(schedule.nextTriggerAt, schedule.timezone) : "—"}
+          value={
+            schedule.nextTriggerAt
+              ? `${formatScheduleRelative(schedule.nextTriggerAt, now)} · ${formatSchedulePreviewTime(schedule.nextTriggerAt, schedule.timezone)}`
+              : "—"
+          }
         />
-        <DetailRow label={m.agents_schedules_last_dispatch()} value={outcome} />
-        {last ? (
-          <>
-            <DetailRow
-              label={m.agents_schedules_scheduled_for()}
-              value={formatScheduleTime(last.scheduledFor, schedule.timezone)}
-            />
-            {last.attemptedAt ? (
-              <DetailRow
-                label={m.agents_schedules_attempted_at()}
-                value={formatScheduleTime(last.attemptedAt, schedule.timezone)}
-              />
-            ) : null}
-            {last.code ? <DetailRow label={m.agents_schedules_code()} value={last.code} /> : null}
-          </>
-        ) : null}
+        <DetailRow label={m.agents_schedules_target()} value={targetLabel} />
       </dl>
-      {last ? (
-        <div className="grid gap-2 border-l-2 border-kumo-line pl-3 text-kumo-subtle">
-          <p>{handoffExplanation(last.outcome)}</p>
-          {last.outcome !== "accepted" ? <p>{m.agents_schedules_no_retry()}</p> : null}
-        </div>
-      ) : null}
+      <Collapsible.Root>
+        <Collapsible.Trigger
+          render={
+            <Button
+              variant="ghost"
+              size="compact"
+              className="h-auto! min-h-8! max-w-full justify-start whitespace-normal text-left"
+            />
+          }
+        >
+          <Icon name="chevron-down" className="shrink-0" />
+          <span className="min-w-0 wrap-anywhere">
+            {m.agents_schedules_last_dispatch()} ·{" "}
+            {last ? handoffOutcome(last.outcome) : m.agents_schedules_no_dispatch()}
+          </span>
+        </Collapsible.Trigger>
+        <Collapsible.Panel className="pt-4">
+          <div className="grid gap-4 border-t border-kumo-line pt-4">
+            <dl className="grid gap-3">
+              <DetailRow label={m.agents_schedules_target_reference()} value={scheduleTargetReference(target)} />
+              {last ? (
+                <>
+                  <DetailRow
+                    label={m.agents_schedules_scheduled_for()}
+                    value={formatSchedulePreviewTime(last.scheduledFor, schedule.timezone)}
+                  />
+                  {last.attemptedAt && last.attemptedAt !== last.scheduledFor ? (
+                    <DetailRow
+                      label={m.agents_schedules_attempted_at()}
+                      value={formatSchedulePreviewTime(last.attemptedAt, schedule.timezone)}
+                    />
+                  ) : null}
+                  {last.code ? <DetailRow label={m.agents_schedules_code()} value={last.code} /> : null}
+                </>
+              ) : null}
+            </dl>
+            {last ? (
+              <div className="grid gap-2 text-kumo-subtle">
+                <p>{handoffExplanation(last.outcome)}</p>
+                {last.outcome !== "accepted" ? <p>{m.agents_schedules_no_retry()}</p> : null}
+              </div>
+            ) : null}
+          </div>
+        </Collapsible.Panel>
+      </Collapsible.Root>
     </div>
   );
+}
+
+function scheduleTargetReference(target: AgentSchedule["target"]): string {
+  const provider = target.provider === "feishu" ? "Feishu" : "Slack";
+  return target.sessionKind === "thread" && target.threadKey
+    ? m.agents_schedules_target_thread({ provider, channel: target.channelId, thread: target.threadKey })
+    : m.agents_schedules_target_channel({ provider, channel: target.channelId });
+}
+
+function ScheduleInstructions({ prompt, id }: { prompt: string; id: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <section className="grid gap-2">
+      <Text as="h3" variant="heading" size="lg" headingSize="body">
+        {m.agents_schedules_prompt()}
+      </Text>
+      <p
+        id={id}
+        className={`whitespace-pre-wrap wrap-anywhere leading-relaxed text-kumo-default ${expanded ? "" : "line-clamp-4"}`}
+      >
+        {prompt}
+      </p>
+      {prompt.length > 60 || prompt.split("\n").length > 3 ? (
+        <Button
+          variant="inline"
+          size="compact"
+          className="w-fit"
+          aria-controls={id}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? m.agents_schedules_collapse_prompt() : m.agents_schedules_expand_prompt()}
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
+function nextScheduleLabel(instant: string, now: number): string {
+  const delta = new Date(instant).getTime() - now;
+  if (Math.abs(delta) < 60_000) return m.agents_schedules_due_now();
+  const time = formatScheduleRelative(instant, now);
+  return delta < 0 ? m.agents_schedules_overdue({ time }) : m.agents_schedules_next_relative({ time });
+}
+
+function formatScheduleRelative(instant: string, now: number): string {
+  const minutes = (new Date(instant).getTime() - now) / 60_000;
+  if (Math.abs(minutes) < 1) return m.agents_schedules_due_now();
+  const unit = Math.abs(minutes) >= 1440 ? "day" : Math.abs(minutes) >= 60 ? "hour" : "minute";
+  const value = Math.round(minutes / (unit === "day" ? 1440 : unit === "hour" ? 60 : 1));
+  return new Intl.RelativeTimeFormat(intlLocale(), { numeric: "auto" }).format(value, unit);
+}
+
+function dispatchWarning(outcome: Exclude<HandoffOutcome, "accepted">): string {
+  return {
+    unreachable: m.agents_schedules_warning_unreachable,
+    rejected: m.agents_schedules_warning_rejected,
+    unknown: m.agents_schedules_warning_unknown,
+    skipped: m.agents_schedules_skipped,
+  }[outcome]();
 }
 
 type HandoffOutcome = NonNullable<AgentScheduleListItem["lastDispatch"]>["outcome"];

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, browserApi } from "../../api.js";
-import { AgentSchedulesSection, formatScheduleTime } from "./agent-schedules-section.js";
+import { AgentSchedulesSection } from "./agent-schedules-section.js";
 
 const AGENT_ID = "10c4a3b9-1631-4e4b-8922-23932ea36237";
 const SCHEDULE_ID = "5238c0ee-a939-4bc0-8772-66d46c9df934";
@@ -54,12 +54,12 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("AgentSchedulesSection", () => {
   it.each([
-    ["accepted", "Received by the runtime"],
-    ["unreachable", "Runtime unreachable"],
-    ["rejected", "Rejected by the runtime"],
-    ["unknown", "Handoff result unknown"],
+    ["accepted", null],
+    ["unreachable", "Couldn’t start"],
+    ["rejected", "Trigger refused"],
+    ["unknown", "Start unconfirmed"],
     ["skipped", "Skipped"],
-  ] as const)("shows the latest %s handoff before details are opened", async (outcome, label) => {
+  ] as const)("shows only exceptional %s trigger feedback before opening details", async (outcome, label) => {
     const item = schedule({
       lastDispatch: { scheduledFor: TIME, attemptedAt: null, messageId: null, outcome, code: null },
     });
@@ -67,9 +67,10 @@ describe("AgentSchedulesSection", () => {
     const detail = vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
 
     mount();
-    expect(await screen.findByText(`Latest handoff: ${label}`)).toBeTruthy();
-    expect(screen.getByTitle(formatScheduleTime(TIME, item.timezone))).toBeTruthy();
-    expect(screen.getByText("Enabled")).toBeTruthy();
+    await screen.findByRole("button", { name: "Daily check" });
+    if (label) expect(screen.getByRole("button", { name: new RegExp(label) })).toBeTruthy();
+    else expect(screen.queryByText(/Received by the runtime|Latest handoff/)).toBeNull();
+    expect(screen.getByRole("img", { name: "Enabled" })).toBeTruthy();
     expect(screen.queryByText(item.prompt)).toBeNull();
     expect(detail).not.toHaveBeenCalled();
   });
@@ -95,6 +96,10 @@ describe("AgentSchedulesSection", () => {
 
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
+    const diagnostics = await within(screen.getByRole("dialog")).findByRole("button", { name: /Last trigger/ });
+    expect(diagnostics.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(explanation)).toBeNull();
+    fireEvent.click(diagnostics);
     expect(await screen.findByText(explanation)).toBeTruthy();
     expect(screen.getByText("runtime_not_ready")).toBeTruthy();
     expect(within(screen.getByRole("dialog")).getByText("Next scheduled time", { exact: true })).toBeTruthy();
@@ -115,12 +120,13 @@ describe("AgentSchedulesSection", () => {
       mount();
       expect(await screen.findByText("One-time schedule exhausted")).toBeTruthy();
       expect(
-        screen.getByText(
-          `Latest handoff: ${outcome === "unreachable" ? "Runtime unreachable" : "Rejected by the runtime"}`,
-        ),
+        screen.getByRole("button", {
+          name: new RegExp(outcome === "unreachable" ? "Couldn’t start" : "Trigger refused"),
+        }),
       ).toBeTruthy();
       expect(screen.queryByText("Enabled")).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
+      fireEvent.click(await within(screen.getByRole("dialog")).findByRole("button", { name: /Last trigger/ }));
       expect(await screen.findByText("The schedule will not retry this occurrence.")).toBeTruthy();
       expect(screen.getByText("runtime_not_ready")).toBeTruthy();
       expect(screen.queryByText(/before the next scheduled time|Future occurrences/)).toBeNull();
@@ -136,7 +142,7 @@ describe("AgentSchedulesSection", () => {
     vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
     mount();
     expect(await screen.findByText("Paused")).toBeTruthy();
-    expect(screen.getByText("Latest handoff: Runtime unreachable")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Couldn’t start/ })).toBeTruthy();
     expect(screen.queryByText(/Next scheduled time/)).toBeNull();
   });
 
@@ -153,7 +159,8 @@ describe("AgentSchedulesSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
     expect(await screen.findByText(item.prompt)).toBeTruthy();
-    expect(screen.getByText(/feishu channel test-chat, thread test-thread/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Last trigger/ }));
+    expect(screen.getByText(/Feishu channel test-chat, thread test-thread/)).toBeTruthy();
     expect(detail).toHaveBeenCalledWith(AGENT_ID, SCHEDULE_ID);
   });
 
@@ -407,10 +414,73 @@ describe("AgentSchedulesSection", () => {
     vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
     vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
     mount();
-    expect(
-      await screen.findByText((_, element) => element?.tagName === "P" && element.textContent === `Enabled · ${label}`),
-    ).toBeTruthy();
+    expect(await screen.findByText(label)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
-    expect(await within(screen.getByRole("dialog")).findByText(`Cron: ${expression}`)).toBeTruthy();
+    expect(
+      await within(screen.getByRole("dialog")).findByText((text) => text === `${label} · Asia/Shanghai`),
+    ).toBeTruthy();
   });
+});
+
+it("shows next time relatively, refreshes it without reading private details and expands long instructions explicitly", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-10-26T08:00:00Z").getTime());
+  const interval = vi.spyOn(window, "setInterval");
+  const item = schedule({ nextTriggerAt: "2026-10-26T10:00:00Z", prompt: "Check the build. ".repeat(50) });
+  vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+  const detail = vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
+  mount();
+  expect(await screen.findByText("Next in 2 hours")).toBeTruthy();
+  expect(screen.queryByText(item.prompt)).toBeNull();
+  expect(detail).not.toHaveBeenCalled();
+  const tick = interval.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+  expect(typeof tick).toBe("function");
+  clock.mockReturnValue(new Date("2026-10-26T09:00:00Z").getTime());
+  act(() => {
+    if (typeof tick === "function") tick();
+  });
+  expect(screen.getByText("Next in 1 hour")).toBeTruthy();
+  expect(detail).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
+  const expand = await screen.findByRole("button", { name: "Show full instructions" });
+  expect(expand.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(expand);
+  expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+  expect(within(screen.getByRole("dialog")).getByText("Every 1 minute · Asia/Shanghai")).toBeTruthy();
+  expect(screen.getByText("Feishu conversation thread")).toBeTruthy();
+  expect(screen.queryByText(/test-chat/)).toBeNull();
+});
+
+it.each([
+  ["2026-10-26T08:00:30Z", "Due now"],
+  ["2026-10-26T08:20:00Z", "Next in 20 minutes"],
+  ["2026-10-28T08:00:00Z", "Next in 2 days"],
+  ["2026-10-26T07:58:00Z", "Due 2 minutes ago"],
+])("labels the observed next occurrence %s as %s without fetching its prompt", async (nextTriggerAt, label) => {
+  vi.spyOn(Date, "now").mockReturnValue(new Date("2026-10-26T08:00:00Z").getTime());
+  const item = schedule({ nextTriggerAt });
+  vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+  const detail = vi.spyOn(browserApi, "agentSchedule");
+  mount();
+  expect(await screen.findByText(label)).toBeTruthy();
+  expect(detail).not.toHaveBeenCalled();
+});
+
+it("describes a Slack conversation without inventing its name and keeps identifiers in diagnostics", async () => {
+  const item = schedule({
+    target: {
+      sessionId: TARGET_ID,
+      provider: "slack",
+      sessionKind: "channel",
+      channelId: "example-chat",
+      threadKey: null,
+    },
+  });
+  vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+  vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
+  expect(await screen.findByText("Slack conversation")).toBeTruthy();
+  expect(screen.queryByText(/example-chat/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Last trigger/ }));
+  expect(screen.getByText("Slack channel example-chat")).toBeTruthy();
 });

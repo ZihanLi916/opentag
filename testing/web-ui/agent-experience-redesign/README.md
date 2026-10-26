@@ -1,98 +1,75 @@
-# Agent Schedule redesign and Memory review
+# Schedule experience acceptance and historical Memory review
 
-## Scope and result
+## Current Schedule journey
 
-Schedules now use compact divided rows inside the existing Overview card. Names open a focused task dialog;
-pause/resume and delete live in the row action menu. The list retains configuration state, next trigger,
-timezone, and the latest handoff outcome/time. Common daily, weekday, weekly and interval rules have localized
-summaries; complex cron expressions stay literal, and details preserve every original cron expression.
-Short timestamps retain the year and expose their complete timezone-aware value to assistive technology.
+The Overview card uses compact divided rows. A name opens private details; the row emphasizes the
+friendly time rule and relative next occurrence. Enabled state has a labelled status dot; paused or
+exhausted state stays explicit. Normal runtime receipt occupies no extra line. Exceptional/unconfirmed
+triggers show a short relative warning that opens details, without claiming task failure or completion.
+Relative times refresh locally each minute with no extra API read. Past pending occurrences read Due,
+not a future time. Exact timezone-aware timestamps remain in titles; repeated timezone/year/seconds are
+removed from the scan path. Complex cron stays literal; the Server remains the schedule calculator.
 
-Busy actions prevent overlapping writes. A refused deletion keeps its error in the confirmation dialog,
-Cancel is initially focused, and a confirmed deletion returns focus to the section after the source row is
-removed. Switching Agents closes private details. Failed refreshes keep loaded rows and offer retry.
-Summary paging, observed revision checks, the existing deep link, and lazy Account-authorized task reads remain.
-An accepted handoff remains a runtime receipt, not a completed business task.
+Details prioritize instructions, friendly rule with timezone, next occurrence and provider/conversation
+context. Long instructions expand explicitly. Trigger diagnostics and technical identifiers are collapsed
+by default; recorded outcome, reason code and exact times remain inspectable. The API supplies no readable
+conversation name, so the UI does not invent one. Accepted still means runtime receipt, never completion.
 
-Memory is a review deliverable, not an implementation. [The review](memory-review.md) records ten findings,
-their observed/code-traced evidence, a page/state proposal, acceptance criteria, and the follow-up comparison
-with Soul, Skills, MCP and Settings. The preferred direction reuses the Skills/MCP resource-management frame,
-the shared header action, and Soul's centered empty state and stable feedback.
+Pause/resume and delete remain in the row menu. Revision checks, summary paging, Agent remount boundary,
+deep links and private prompt lazy loading are retained. Deletion confirms impact, prevents overlapping
+writes, keeps refused errors, refreshes the observed target after conflict and requires another explicit
+confirmation. Missing targets close; failed refresh blocks deletion until explicit read retry recovers.
 
-## Verification boundary
+## Current verification
 
-- Schedule browser evidence mounts the production `App`, real router, shell, page, components, CSS and translations
-  in a local Vite-built fixture. Account, Computer, Messaging, usage, task and Schedule API responses are synthetic.
-  The fixture rejects unexpected JavaScript fetches. It is not a live-server or deployed product acceptance run.
-- `schedule-matrix.json`: English/Chinese × 320/390/768/1440px × normal, empty, 120-character name, exhausted
-  one-time schedule and paged summaries: 40 combinations, no document/frame/section overflow, no eager private
-  detail reads, and no unexpected API requests. The detail dialog also fits all eight locale/width combinations.
-- `schedule-flow-results.json` records the actual keyboard, action, recovery and scoped axe results.
-- The current dev browser redirects to sign-in. Real GitHub authorization, schedule dispatch, runtime delivery,
-  and deployed-product acceptance remain unverified. No repository, schedule, or remote configuration was created
-  by the browser fixture. Stored English example names are intentionally not translated by switching UI locale.
-- Memory evidence uses the real isolated settings component with synthetic API/config refreshes; its 56 combinations
-  and representative flows are separately described in `memory-review.md` and its two JSON summaries.
+- 53 focused Schedule/catalog/Kumo tests passed (38+3+12), including relative/due/overdue labels,
+  local clock refresh without private reads, collapsed diagnostics, explicit instruction expansion and
+  honest conversation fallback. A Slack test fixture initially omitted required threadKey:null; the
+  fixture was corrected, its focused case and Web typecheck passed. Production build passed.
+  The previous 35-test run covered the earlier correctness fix.
+- `schedule-information.json`:40 en/zh ×320/390/768/1440 state layouts, no page/frame/section overflow,
+  no private detail reads before opening; eight default detail layouts and keyboard diagnostic disclosures.
+- `schedule-long-instructions.json`:eight long-title/instruction expand/collapse flows; expanded content
+  stays horizontally bounded and its bottom is reachable with 24px padding. Two current list axe scans
+  plus two detail scans found no automatic WCAG A/AA/2.1 AA violations, not full accessibility acceptance.
+- `schedule-conflict-current.json`:eight en/zh four-width 409→summary refresh→explicit retry flows submit
+  revisions[2,3], perform no private prompt read and preserve the existing mutation safety contract.
+- The first new 320px detail capture exposed an unbreakable diagnostic trigger widening the grid. The
+  final bounded grid/wrapping trigger fixes it; the complete current runs above were captured afterward.
+- `schedule-due-labels.json`:fresh final-build normal captures plus due-now/overdue labels at narrow
+  widths fit without private detail reads. They do not imply an occurrence completed.
+- Raw same-origin favicon observations are retained separately from business API assertions. A driver
+  selector also matched the Chinese actions label; it was narrowed to the exact title. Local preview
+  restarts after turn interruptions are harness recovery, not product regressions.
 
-## Local checks
+All captures use the production App/router/shell/components/CSS/translations with synthetic APIs. The
+Schedule fixture fixes time at Monday 2026-10-26 16:00 Shanghai: last weekday trigger Monday 09:30, next
+Tuesday 09:30. This corrects the older Saturday-next/weekday-rule mismatch. There is no live repository,
+Schedule, delivery or runtime side effect. Stored English example names do not change with locale.
 
-- `pnpm --filter @opentag/web test src/features/agents/agent-schedules-section.test.tsx`: 29 tests passed.
-  Coverage includes handoff meaning, prompt lazy loading, pagination/recovery, deep links, observed revisions,
-  overlapping mutations, rejected deletion, focus recovery, Agent switches and conservative cron presentation.
-- `pnpm --filter @opentag/web typecheck`: passed during development; the native pre-push gate checks all packages.
-- `pnpm --filter @opentag/web build`: passed. Existing `node:crypto` browser-externalization and large-chunk warnings
-  remain; the configured bundle gates pass. The local fixture build also passed.
-- `pnpm check`: passed after formatting the evidence JSON. Existing repository-wide complexity warnings and the
-  Biome configuration-schema version notice remain; the complexity ratchet and Context Tree verification pass.
-- CI and authenticated deployed acceptance are separate requirements; local results do not assert either passed.
+## Current rendered evidence
 
-## Visual evidence
+![Current native-scale core screens](schedule-core-pages.png)
 
-### Core screens after the change
+- `schedules-after-{en,zh}-{390,1440}-normal.png`:current production-shell overview.
+- `schedules-detail-en-1440.png`, `schedules-detail-zh-320.png`:default focused details.
+- `schedules-diagnostics-zh-320.png`:expanded diagnostic content with reachable padded bottom.
+- `schedules-after-en-1440-empty.png`:current empty state.
+- `schedules-before-1440.png`:original isolated baseline; surrounding context differs from the final
+  App capture, so it is not a measured full-page height comparison.
+- `schedule-matrix.json` and `schedule-flow-results.json`:historical earlier-layout behavioral acceptance,
+  not proof of the current information hierarchy. Git history preserves superseded error captures.
 
-The overview and task details below use the production App fixture with synthetic data.
-They show the implemented branch, not a deployed acceptance run. The contact sheet preserves
-the native screenshot scale; use the individual images for focused review.
+The three unrelated local draft PNGs remain untracked and excluded from delivery.
 
-![Core Schedule screens: desktop overview and task details, Chinese mobile overview and task details](schedule-core-pages.png)
+## Historical Memory review
 
-#### Desktop overview — English, 1440px
+The delivered [Memory review](memory-review.md), its images and JSON records remain unchanged in this
+Schedule PR. Its header-action proposal is historical; the later normally-one-tree owner direction and
+implementation belong to independent Memory PR1037. This PR does not claim to implement that review.
 
-![Desktop Agent Overview with compact Schedule rows](schedules-after-en-1440-normal.png)
+## Delivery boundary
 
-#### Task details — English, 1440px
-
-![Focused Schedule task dialog with original time rule and handoff semantics](schedules-detail-en-1440.png)
-
-#### Mobile overview — Chinese, 390px
-
-![Chinese mobile Agent Overview and Schedule list](schedules-after-zh-390-normal.png)
-
-#### Mobile task details — Chinese, 320px
-
-![Chinese narrow-screen Schedule task dialog](schedules-detail-zh-320.png)
-
-### Additional states and baseline
-
-- `schedules-before-1440.png`: original isolated component baseline.
-- `schedules-after-{en,zh}-{390,1440}-normal.png`: final production shell and Schedule composition.
-- `schedules-detail-en-1440.png`, `schedules-detail-zh-320.png`: focused detail dialog.
-- `schedules-after-en-1440-empty.png`: composed empty state.
-- `schedules-delete-error-en-1440.png`, `schedules-load-error-en-1440.png`: recovery surfaces.
-- `memory-before-*.png` and `memory-review-*.png`: evidence referenced by the Memory review.
-
-The original before image and final shell image have different surrounding contexts; compare the Schedule
-composition, not the entire page height as a measured improvement. Intermediate draft images are retained
-locally and excluded from the review commit.
-
-## Review corrections
-
-The locale catalog is sorted in both languages and the obsolete Show/Hide details keys are removed.
-The unchanged catalog invariant suite passes alongside the Schedule behavior suite (35 tests total).
-Three added behavior cases cover a revision conflict followed by an explicit successful retry using
-its refreshed revision, a target disappearing during refresh, and a failed refresh blocking deletion
-until the user explicitly recovers the read. The confirmation observes refreshed summaries without
-fetching the private prompt. The count now includes a screen-reader description of loaded schedules.
-
-The original responsive overview/detail screenshots remain representative: the review correction changes
-conflict recovery and accessibility text, without changing those normal-state compositions.
+Current-head CI, reviewer clearance and deployed acceptance must be observed separately. The dev browser
+previously redirected to sign-in; these local synthetic results do not establish actual permissions,
+Schedule dispatch, runtime preparation/delivery or product completion. No merge/deploy is performed.
