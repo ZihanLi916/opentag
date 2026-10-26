@@ -113,6 +113,20 @@ Every request body carries `_meta` with `io.modelcontextprotocol/protocolVersion
 (should). A response is a single JSON object or a request-scoped SSE stream; a notification is
 `202` with no body; an unknown method is `404` with `-32601`.
 
+**A 2xx status alone is not an answer.** A successful response is a JSON-RPC response or a bare
+result object; a request-scoped SSE stream must carry the response for the request that opened it. An
+unreadable successful body — an HTML error page from a proxy, an empty body, a truncated object, a
+JSON value that is not an object, or an envelope with no `result` — and a stream that ends without
+that answer are protocol failures reported as `MCP_UPSTREAM_ERROR`, never as an empty result. The
+probe would otherwise record a Server that answered nothing as a healthy one with zero tools, and a
+gateway `tools/call` would answer with an envelope that carries no `result`. A `202` or `204` answers
+a notification only: `tools/call`, `tools/list`, and `initialize` each require a result, so an
+acknowledgement of one is `MCP_UPSTREAM_ERROR` as well. A present but unreadable `error` member —
+`null`, a scalar, an array, or a wrong-typed `code` or `message` — is also `MCP_UPSTREAM_ERROR`, with
+the real HTTP status and a fixed message, never a raw type error. Valid answers still pass: an
+explicit `"result": null`, a `202`/`204` notification acknowledgement, and a JSON-RPC error whose
+`code` the caller branches on.
+
 Because there is no session, **a Server must not rely on prior requests**. This is also why the probe
 snapshot is per authorization row rather than per Server: two credentials are two independent clients.
 
@@ -129,17 +143,50 @@ The MCP-registered codes `-32020`, `-32021`, and `-32022` are the modern signals
 `-32601` is deliberately *not* one: an older Server also answers `-32601` for a method it does not
 know, so treating it as a modern signal would retry forever instead of falling back once.
 
+The handshake's `notifications/initialized` speaks the revision that `initialize` negotiated,
+exactly as the request after it does. `2025-06-18` and `2025-11-25` expect `MCP-Protocol-Version` on
+every request after the handshake, so the notification carries the negotiated value. `2025-03-26`
+predates that header, so its notification omits it. Omission is not a neutral default: the
+specification reads a missing header as `2025-03-26`, so a strict `2025-06-18` or `2025-11-25`
+Server refuses a notification that a permissive Server accepted.
+
 The same `-32601` decides the era **at any status**, not only on `400`, `404`, or `405`. Zoom's MCP
 Server rejects `server/discover` with `-32601` at HTTP `200` while listing the method as valid; a
 status-only gate read that as a modern peer and failed the probe with `MCP_UPSTREAM_ERROR` before
 `initialize` was ever tried. This applies to the probe's `server/discover` only. The gateway never
 replays on `-32601`, because a `tools/call` can raise it from inside the tool.
 
+A legacy handshake is three requests: `initialize`, `notifications/initialized`, then whatever the
+caller actually wanted. The notification is sent **unconditionally**: it is the message that closes
+the handshake, not a message scoped to a session. A Server may answer `initialize` without issuing
+`Mcp-Session-Id`, and such a peer still waits for `notifications/initialized` before it accepts
+anything else, so sending it only when a session came back left a session-less Server talking to a
+client that had never introduced itself. `Mcp-Session-Id` is attached to the notification only when
+the handshake issued one. A failure of either handshake request fails the operation before anything
+is dispatched: a gateway `tools/call` is never sent, and a probe records `probe_state = failed` with
+no `tools/list`. The notification carries no `id` and returns no result, so its HTTP status is checked
+on its own: a non-2xx answer is the transport's bounded failure — `The MCP Server returned HTTP
+<status>`, or the shared `MCP_AUTH_REJECTION_SUMMARY` for `401` and `403`. That summary is built from
+the status alone; the notification's response body is never interpreted or exposed, so an upstream
+message cannot reach a probe error, a log line, or a model. The outbound fetcher reads and bounds the
+body before it returns, so a redirect or an oversized body fails inside the fetcher first, as its own
+bounded error, rather than as one of these status summaries.
+
 The probe API answers `200` whether or not the probe succeeded and never returns the upstream
 status. A failed probe and a legacy fallback each write one `info` line carrying `upstreamStatus`,
 `rpcCode`, and `errorCode` — never the upstream message — so the status the Server really sent is
 readable in the service log. Every probe log line identifies the Server by `endpoint`, the URL origin only,
 because an endpoint path or query can carry a credential that the logger's key-name redaction does not catch.
+
+A caller's cancellation reaches all three hops. The gateway forwards the `AbortSignal` it was given
+to `initialize`, to `notifications/initialized`, and to the `tools/call`, so a cancelled turn cannot
+leave a legacy peer part-way through a handshake opened for an answer nobody will read. A signal
+that is already aborted sends nothing at all: no `initialize`, so no session is opened and then
+abandoned, and no notification. One that fires during the handshake ends the call at the hop in
+flight, and the hops after it are never sent — in particular the `tools/call`, which is the request
+that can have a side effect. This is the outbound policy's cancellation rule ("a cancelled call is
+not dialed") applied per hop rather than only to the request the caller named. A probe is bounded by
+its own deadline and takes no caller signal, so none of this makes a probe cancellable.
 
 A dual-endpoint HTTP+SSE Server (2024-11-05) is reported as `MCP_TRANSPORT_UNSUPPORTED` rather than
 being half-supported.
@@ -562,7 +609,7 @@ of the entry and continue working through their own client. A new Web installati
 preferred endpoint and creates an independent definition, with name-conflict handling if an older
 installation already holds the catalog name.
 
-#### The deployment HubSpot, Asana, and Zoom clients
+#### The deployment HubSpot, Asana, Zoom, and GitHub clients
 
 These providers offer neither dynamic registration nor a client metadata document, so a deployment
 that wants its Agents to use them registers its own OAuth app with each provider and configures
@@ -578,6 +625,7 @@ also derives the variable names; the Canva client above is a row of the same tab
 | HubSpot | `OPENTAG_MCP_HUBSPOT_CLIENT_*` | `https://mcp.hubspot.com` | `https://mcp.hubspot.com` | `client_secret_post` |
 | Asana | `OPENTAG_MCP_ASANA_CLIENT_*` | `https://mcp.asana.com` | `https://app.asana.com` | `client_secret_basic` |
 | Zoom | `OPENTAG_MCP_ZOOM_CLIENT_*` | `https://mcp.zoom.us` | `https://zoom.us` | `client_secret_basic` |
+| GitHub | `OPENTAG_MCP_GITHUB_CLIENT_*` | `https://api.githubcopilot.com` | `https://github.com/login/oauth` | `client_secret_post` |
 
 Operator setup, for every brand: register `<OPENTAG_PUBLIC_URL>/api/v1/mcp-servers/oauth/callback` as
 the redirect URL. Create a HubSpot **MCP Auth App** (Development > MCP Auth Apps), an Asana app of
@@ -585,6 +633,28 @@ type **MCP app**, and a Zoom **General app** with user-level OAuth. HubSpot assi
 installation and advertises none in its metadata. Zoom's challenge carries no `scope`, so the flow
 requests every `scopes_supported` entry its protected resource metadata advertises; a Zoom app grants
 only the scopes listed on its **Scopes** page, so add the full advertised list there.
+
+GitHub uses the [official remote MCP server](https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md).
+An existing GitHub OAuth App can supply the MCP client pair: add the MCP callback alongside its
+existing callbacks and keep the same Client ID. The GitHub catalog entry requests `repo offline_access`
+and selects the `context,repos,issues,pull_requests,users` toolsets. Each Agent completes its own MCP
+OAuth flow and stores its own encrypted access/refresh credential. Reusing the App does not reuse the
+Account integration's token, connect other Agents, or add GitHub sign-in. Native Git/gh and Context
+Tree keep their existing integration code and credential path.
+
+App reuse does couple credential availability. The Account integration and GitHub MCP both request
+`repo offline_access`, so the same GitHub user's Account and Agent tokens share GitHub's limit of ten
+tokens per user/App/scope combination. An additional authorization beyond that limit revokes an
+existing token, preferring an unused token and otherwise the least recently used one. That token can
+belong to the Account integration, breaking its native Git/gh and Context Tree access, or to another
+Agent. Independent encrypted rows do not isolate this upstream revocation. Historical authorizations
+also consume the limit, so ten tokens does not guarantee ten Agents can connect. GitHub additionally
+limits creation to ten tokens per hour; exceeding that rate prompts reauthorization.
+
+A dedicated MCP OAuth App isolates this bucket from the Account integration; Agent credentials still
+share the dedicated App's per-user limit. Choose the deployment's App with this constraint in mind;
+there is no automatic App separation, token-budget enforcement, or cross-Agent token sharing. See
+[GitHub's OAuth token limits](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#creating-multiple-tokens-for-oauth-apps).
 
 Each client follows the same rules as the Google and Canva clients: it is resolved from configuration
 and never stored, and it is offered only when the Server's effective origin is one of the provider's

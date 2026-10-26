@@ -1,5 +1,34 @@
 # Agent Memory redesign acceptance record
 
+## Cloud creation integration (local, not yet published)
+
+The working tree integrates main `4cf2978b64f74a3b3fcaddf37ef3e57558a207d5` into
+`e9a9e478bd2aec32e142b6aef788f2af4cc6377b`, adopting Cloud creation from both the empty
+state and the secondary collection menu. The previous Cloud-only connect description is retired.
+The Cloud rows in the earlier `single-tree-matrix.json` are historical; current Cloud acceptance is
+`cloud-integration.json`. Other earlier single-tree flows remain unchanged.
+
+Captured 2026-10-26 with the production App/router and synthetic APIs; no real repository was created.
+`cloud-integration.json` records the exact component SHA-256, base and integrated main revision.
+It contains 16 successful create flows (two entries × en/zh × 320/390/768/1440) and eight uncertain
+creation/recovery flows. Each create sends one request with expected Agent/runtime revisions;
+recovery retains the attempted repository, locks repeated creation, focuses the prefilled connect
+input and sends no automatic retry. All measured pages/dialogs fit their viewport.
+
+- [Cloud create from collection, English 1440 × 1000](memory-cloud-create-en-1440-connected.png).
+- [Cloud create from empty state, Chinese 320 × 1000](memory-cloud-create-zh-320-empty.png).
+- [Cloud empty state, Chinese 390 × 1000](memory-cloud-empty-zh-390.png).
+- [Uncertain Cloud creation, Chinese 390 × 1000](memory-cloud-uncertain-zh-390.png).
+- Additional create captures cover the opposite entry at both representative widths.
+
+Local validation: the first focused command passed 52 and failed one catalog assertion because
+Biome split a message reference across lines; a separate description variable fixes that formatting
+interaction without weakening the catalog guard. The corrected catalog passed four tests. The old
+page-test path matched no file, so the actual `src/__tests__/context-tree-page.test.tsx` was then run:
+four tests passed. Web typecheck, the production App fixture build and `pnpm check` passed.
+No fresh Cloud axe scan or deployed acceptance is claimed. GitHub access failed in this scheduled
+entry, so publication, new-head CI, reviewer clearance and remote ledger persistence remain pending.
+
 ## Current layout
 
 Memory uses the shared resource PageHeader without a primary action. A typical Agent's single
@@ -55,11 +84,11 @@ The prior review is [product Issue 1019](https://github.com/first-tree-ai/openta
 The original published `94dda10e` source, limit/focus fixes and new `memory-final-*` core captures
 are preserved. Independent en/zh four-width acceptance against the same rendered layout adds:
 
-- `single-tree-matrix.json`:56 states and8 connect-dialog widths, no page/main overflow. States cover
-  empty,connected,active,offline,combined restrictions,Cloud and32 long-name trees.
-- `single-tree-flows.json`:8 A→B→A lock/recovery flows, exact prefill/input focus, no automatic write,
+- `single-tree-matrix.json`: 56 states and 8 connect-dialog widths, no page/main overflow. States cover
+  empty, connected, active, offline, combined restrictions, Cloud and 32 long-name trees.
+- `single-tree-flows.json`: 8 A→B→A lock/recovery flows, exact prefill/input focus, no automatic write,
   keyboard trailing action, expanded-help fit, first-connect and last-disconnect focus.
-- `single-tree-axe.json`:4 scoped WCAG A/AA/2.1 AA scans without automatic violations; not a complete
+- `single-tree-axe.json`: 4 scoped WCAG A/AA/2.1 AA scans without automatic violations; not a complete
   accessibility acceptance.
 - New `memory-final-disconnect-en-390.png`, `memory-final-uncertain-en-390.png` and
   `memory-final-uncertain-help-zh-320.png` show current confirmation and recovery states. Their source

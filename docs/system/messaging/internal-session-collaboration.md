@@ -19,6 +19,17 @@ the current Session, placement generation, Computer connection, and Client conne
 reuse the same proof, including retries after a timeout or lost response. Placement, connection, Agent, or IM-binding
 changes invalidate the old proof.
 
+On Local Computers, managed command instructions use an absolute invocation from the installation running the daemon.
+Portable installs use that installation's stable channel launcher; npm installs use the running Node executable and CLI
+entry script. A stable Node alias is preferred when it resolves to that same executable, including Homebrew's `opt`
+path; a different Node on `PATH` cannot replace it. Service installation and refresh use the same selection, independent
+of same-name CLI commands on ambient `PATH`. Paths and arguments are quoted separately. Claude Code Bash allowances
+and Codex command-prefix rules receive these same invocation tokens, including the npm entry script, rather than
+allowing every script run by Node. A missing or inconsistent local entry is a local configuration error; daemon logs
+include its path, reason, running version, and the installed Portable version when available.
+Visible Session create/send commands read the current execution marker on each invocation, including when the Provider
+process persists across Turns; they do not reuse an earlier Turn's inherited execution ID.
+
 For Local Computers, all Provider processes launched by one daemon OS user currently form one trust domain. File permissions protect proof
 files from other OS users and accidental exposure, but do not isolate sibling Sessions running as that same user. Until
 openTag introduces per-Session OS or container isolation, the proof lets the Server validate a live Runtime binding and

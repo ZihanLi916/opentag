@@ -193,7 +193,6 @@ function ContextTreeSettingsForm({
     }
   }
   function submit() {
-    if (cloud && activeMode === "create") return;
     if (disabled || uncertainCreation || !validateSubmission()) return;
     void run(activeMode, source);
   }
@@ -218,7 +217,6 @@ function ContextTreeSettingsForm({
         agentId={config.id}
         online={online}
         selected={selected}
-        cloud={cloud}
         pending={pending}
         pauseRequired={pauseRequired}
         unconfirmed={unconfirmed}
@@ -491,7 +489,6 @@ function ContextTreeCollection({
   agentId,
   online,
   selected,
-  cloud,
   pending,
   pauseRequired,
   unconfirmed,
@@ -504,7 +501,6 @@ function ContextTreeCollection({
   agentId: string;
   online: boolean;
   selected: ContextTreeConnection[];
-  cloud: boolean;
   pending: boolean;
   pauseRequired: boolean;
   unconfirmed: boolean;
@@ -534,68 +530,47 @@ function ContextTreeCollection({
           ))}
           {selected.length < CONTEXT_TREES_MAX ? (
             <div className="p-3">
-              {cloud ? (
-                <Button
-                  ref={addButton}
-                  variant="ghost"
-                  disabled={pending || pauseRequired || unconfirmed}
-                  onClick={(event) => openForm("connect", event.currentTarget)}
+              <DropdownMenu>
+                <DropdownMenu.Trigger
+                  render={<Button ref={addButton} variant="ghost" disabled={pending || pauseRequired || unconfirmed} />}
                 >
                   <Icon name="plus" />
                   {m.agent_settings_context_tree_connect_another()}
-                </Button>
-              ) : (
-                <DropdownMenu>
-                  <DropdownMenu.Trigger
-                    render={
-                      <Button ref={addButton} variant="ghost" disabled={pending || pauseRequired || unconfirmed} />
-                    }
-                  >
-                    <Icon name="plus" />
-                    {m.agent_settings_context_tree_connect_another()}
-                    <Icon name="chevron-down" />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Content align="start">
-                    <DropdownMenu.Item onClick={() => openForm("connect")}>
-                      {m.agent_settings_context_tree_connect_existing()}
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item onClick={() => openForm("create")}>
-                      {m.agent_settings_context_tree_create_new()}
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu>
-              )}
+                  <Icon name="chevron-down" />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Content align="start">
+                  <DropdownMenu.Item onClick={() => openForm("connect")}>
+                    {m.agent_settings_context_tree_connect_existing()}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item onClick={() => openForm("create")}>
+                    {m.agent_settings_context_tree_create_new()}
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu>
             </div>
           ) : null}
         </section>
       ) : (
-        <ContextTreeEmptyState
-          cloud={cloud}
-          pending={pending || unconfirmed}
-          addButton={addButton}
-          onChoose={openForm}
-        />
+        <ContextTreeEmptyState pending={pending || unconfirmed} addButton={addButton} onChoose={openForm} />
       )}
     </>
   );
 }
 
 function ContextTreeEmptyState({
-  cloud,
   pending,
   addButton,
   onChoose,
 }: {
-  cloud: boolean;
   pending: boolean;
   addButton: RefObject<HTMLButtonElement | null>;
   onChoose: (mode: TreeAction, trigger: HTMLElement) => void;
 }) {
-  const parts = (
-    cloud
-      ? m.agent_settings_context_tree_empty_cloud({ connect: "\uFFFC" })
-      : m.agent_settings_context_tree_empty_description({ connect: "\uFFFC", create: "\uFFFD" })
-  ).split(/(\uFFFC|\uFFFD)/u);
+  const description = m.agent_settings_context_tree_empty_description({
+    connect: "\uFFFC",
+    create: "\uFFFD",
+  });
+  const parts = description.split(/(\uFFFC|\uFFFD)/u);
   return (
     <section className="flex flex-col items-center gap-5 px-4 py-12 text-center sm:py-16">
       <Icon name="memory" weight="light" className="size-8 text-kumo-inactive" />

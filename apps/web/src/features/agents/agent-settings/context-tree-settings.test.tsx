@@ -165,21 +165,30 @@ it("renders source cards with exact GitHub links and disconnects only the chosen
   );
 });
 
-it("offers a secondary collection action without a source counter and keeps Cloud limited to existing trees", async () => {
-  const view = render(
-    <ContextTreeSettings config={config("agent-a", "acme/memory")} computerKind="cloud" online onChanged={vi.fn()} />,
+it.each([null, "acme/existing"])("creates a Cloud tree with existing selection %s", async (repository) => {
+  const operation = vi
+    .spyOn(browserApi, "contextTreeOperation")
+    .mockResolvedValue({ status: "completed", repository: "acme/memory", ref: "trunk" });
+  const changed = vi.fn();
+  render(
+    <ContextTreeSettings config={config("agent-a", repository)} computerKind="cloud" online onChanged={changed} />,
   );
-  expect(screen.queryByRole("button", { name: "Add tree" })).toBeNull();
-  expect(screen.queryByText("1 of 32 sources")).toBeNull();
-  expect(screen.getByRole("button", { name: "Connect another Context Tree" })).toBeTruthy();
-  const dialog = await openForm();
-  expect(within(dialog).getByText(/Account settings/)).toBeTruthy();
-  expect(screen.queryByRole("menuitem", { name: /Create Context Tree/ })).toBeNull();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  const dialog = await openForm("create");
+  expect(within(dialog).getByText(/new private repository/)).toBeTruthy();
+  expect(within(dialog).getByText("Manage GitHub authorization in Account settings.")).toBeTruthy();
+  enter();
+  submit("create");
+  await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(operation).toHaveBeenCalledExactlyOnceWith("agent-a", {
+    action: "create",
+    kind: "git",
+    repository: "acme/memory",
+    path: ".",
+    ref: "HEAD",
+    expectedRevision: 2,
+    expectedRuntimeConfigRevision: 3,
+  });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  view.rerender(<ContextTreeSettings config={config("agent-b")} computerKind="cloud" online onChanged={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: "Create Context Tree" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Connect Context Tree" })).toBeTruthy();
 });
 
 it("hides the secondary connection action when the Context Tree limit is reached", () => {

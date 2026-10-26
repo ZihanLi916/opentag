@@ -28,7 +28,7 @@ in one repository are allowed. Array order gives no tree precedence.
 
 Memory uses the same page header and collection layout as other Agent resources, without a primary
 header action or capacity counter. The centered empty state offers lightweight **Connect Context Tree**
-and Local-only **Create Context Tree** shortcuts. Connected Context Trees appear as divided rows in one
+and **Create Context Tree** shortcuts for both Local and Cloud Agents. Connected Context Trees appear as divided rows in one
 surface, with repository/directory, branch, and a direct GitHub-folder link. A trailing secondary
 **Connect another Context Tree** action keeps additional connections available inside the collection.
 The trailing action is absent at the connection limit rather than presenting an unexplained disabled control.
@@ -45,7 +45,7 @@ directory means the repository root. GitHub’s default branch is resolved durin
 and saved with the connection. Both Local and Cloud can connect existing trees.
 Create accepts an owner and repository name and uses GitHub's default branch.
 Neither dialog asks for a branch.
-Local Computers can also create private repositories: OpenTag creates the repository,
+Both Local and Cloud Computers can create private repositories: OpenTag creates the repository,
 generates the initial page with the pinned `context-tree init`, and commits it through
 GitHub's contents API. Connection verification and creation run exclusively on the Server with the Account's current GitHub
 credential; it does not require Computer-side GitHub credentials. The OAuth authorization must allow private repositories, and the connected user
