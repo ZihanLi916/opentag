@@ -1,96 +1,50 @@
 # Agent Memory redesign acceptance record
 
-## Implemented behavior
+## Current layout
 
-Memory reuses the existing resource PageHeader without a primary action and keeps the centered
-Soul-style empty composition. Saved Context Trees appear as divided rows inside one collection,
-with repository/directory, branch and a direct GitHub link. A trailing secondary action exposes
-additional connections without framing the page as an unbounded library. No runtime-ready status
-is inferred from a saved connection. English consistently uses Context Tree and Chinese consistently
-uses 知识树 across the page and dialogs.
+Memory uses the shared resource PageHeader without a primary action. A typical Agent's single
+Context Tree appears as a divided collection row; connecting another tree is a secondary action at
+the end of that collection and disappears at the 32-tree limit. The empty state keeps direct
+Connect Context Tree and Create Context Tree shortcuts. English consistently uses Context Tree and
+Chinese consistently uses 知识树.
 
-Disconnect confirms the exact Context Tree and preservation impact, initially focuses Cancel, blocks
-dismissal/duplicate submissions while pending, retains failures in the confirmation and restores
-focus to a surviving neighbour or the empty-state shortcut. Confirmed first connections return focus
-to the trailing collection action and retain visible success feedback.
+Disconnect identifies the exact Context Tree, blocks duplicate submissions, and restores focus to
+a surviving collection action. Creation outcomes that are unknown are retained by case-insensitive
+repository identity, including when a background config refresh changes the revision before the
+response arrives. A confirmed connection clears only the matching unresolved repository.
 
-Uncertain creation keeps every attempted repository by case-insensitive identity, blocks unchanged
-creation across other attempts, reopening and case-only edits, and offers Open repository / Connect
-existing with the matching repository prefilled and focused. A successful connection clears only that
-repository's uncertainty. Those recovery actions do not automatically send another request. Longer
-repository recovery guidance is secondary disclosure. Directory errors are associated with the field; a
-folder-URL example explains the repository-root/directory split without guessing branch names.
+## Current screenshots
 
-Pause and offline restrictions are explained together above the collection. Paused/offline disconnect remains available;
-active sources require pause. Cloud exposes only existing-tree connection. Account and restriction
-repair links open a new tab so a draft remains in its original tab. Server revision checks,
-operation scope guards and preservation of repository/cache/unpublished work remain intact.
+These screenshots were captured on 2026-10-26 from the production App/router/shell fixture and a
+production Web build whose rendered UI is based on `1c44c89588ae4628eabc6b0a6878337c3e46d489`.
+The capture working tree also contained only the later nonvisual uncertainty-race correction. Account,
+Computer, Agent config, and repository data are synthetic; the fixture makes no real repository,
+connection, or runtime mutation.
 
-Initial read failures retain the Memory heading and offer explicit transient retry. A transient
-refresh failure appears below the page title, keeps the form/draft and last selection, visibly marks
-the data unconfirmed and disables writes. Terminal authorization/resource failures hide stale settings.
+- [English connected, 1440 × 1000](memory-final-en-1440-connected.png) — one Context Tree and the
+  in-collection **Connect another Context Tree** action.
+- [English empty, 1440 × 1000](memory-final-en-1440-empty.png) — the single-tree-first empty state.
+- [Chinese connected, 390 × 1000](memory-final-zh-390-connected.png) — the responsive collection and
+  secondary **连接另一棵知识树** action.
+- [Chinese empty, 390 × 1000](memory-final-zh-390-empty.png) — responsive empty-state shortcuts.
+- [Chinese connect dialog, 320 × 1000](memory-final-connect-zh-320.png) — the narrow repository and
+  directory form opened from the collection action.
 
-## Local verification
+The pre-revision screenshots, matrix, flow report, and recovery-disclosure report were removed from
+the active evidence directory; PR history preserves them without presenting the old header action and
+source counter as current behavior.
 
-- Component behavior: `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
-  — 28 passed. Covers existing operations and limits plus confirmation, pending/refused disconnect,
-  first/last/neighbour focus, multiple uncertain-result identities and targeted recovery, restriction combinations
-  and unconfirmed writes.
-- Page/query composition: `pnpm --filter @opentag/web test src/__tests__/context-tree-page.test.tsx`
-  — 4 passed, including initial retry, draft retention/recovery and terminal refusal.
-- `pnpm --filter @opentag/web typecheck` and `pnpm --filter @opentag/web build` passed.
-  Existing browser-externalization and chunk-size warnings remain. Local fixture build passed.
-- `pnpm check` passed, including the complexity ratchet and Context Tree verification. Existing schema-version/complexity warnings remain; publication-time native gates and CI are separate.
+## Verification
 
-## Retired browser evidence and limits
+- `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
+  — 30 tests passed, including multiple unresolved identities, matching recovery, config-revision
+  uncertainty, operation limits, and focus restoration.
+- `pnpm --filter @opentag/web build` passed before capture. Existing browser-externalization and
+  chunk-size warnings remain.
+- Each capture was inspected at its original viewport. The connected and empty states contain the
+  expected localized labels, and the 320px dialog keeps all fields, guidance, and actions in view.
 
-The `matrix.json`, `flows.json`, and PNG screenshots in this directory were captured before the
-collection-local connection action replaced the header Add tree action and source counter. They are
-retained as historical evidence and explicitly marked retired; they do not validate the current layout.
-No replacement browser matrix was run for this revision. Current evidence is the focused component/page/catalog
-tests, the broader Web test run, typecheck, build, and repository checks recorded above.
-
-The retired fixture mounted the production App, router, shell, Memory page, Kumo adapter, CSS and translations.
-Account, Computer, configuration and operation responses are synthetic; unexpected JavaScript fetches
-are rejected. It creates no real repository, connection, schedule or runtime side effect.
-
-- Retired `matrix.json`: English/Chinese × 320/390/768/1440px × empty, connected, active, offline,
-  active/offline, Cloud and 32 long-name sources: 56 combinations with no page/main overflow or
-  unexpected API request. Connect dialogs fit all eight locale/width combinations after fixing
-  a Directory-hint grid overflow. The original narrow-dialog finding and successful rechecks are retained.
-- Retired `flows.json`: actual keyboard focus/Tab/Escape, field errors, authentication repair, unknown creation,
-  first connection, delayed/confirmed/refused disconnect, and read-retry results. Four scoped WCAG
-  A/AA/2.1 AA axe scans found no automatic violations. This does not establish complete accessibility.
-- A 200% CSS zoom layout check fits; this is not a native browser-zoom acceptance claim.
-  Reduced-motion preference was emulated and the flow remained operable; the shared dialog still
-  reports its inherited 150ms transition token, which this feature does not replace.
-- Initial setup required building the new checkout's public workspace packages before tests could
-  resolve them. Early failures were retained in execution history and not counted as passing results.
-- The previous matrix process lost its receipt during a turn interruption. The saved final matrix
-  was rerun and inspected; unavailable output is not counted as validation.
-- Authenticated deployed acceptance, actual GitHub permissions/publication and runtime memory
-  preparation remain separate. The available dev browser previously redirected to sign-in.
-  These local results do not establish that CI or deployed acceptance passed.
-
-## Retired screenshots
-
-- These screenshots show the pre-revision header Add tree action and source count where applicable; they are not
-  current UI acceptance evidence.
-- `memory-after-en-1440-{empty,connected,offline-active,cloud}.png`: retired desktop composition.
-- `memory-after-zh-390-{empty,connected,offline-active,cloud}.png`: Chinese mobile composition.
-- `memory-connect-zh-320.png`: narrow connect form after the Directory-hint fix.
-- `memory-auth-error-en-390.png`, `memory-uncertain-en-390.png`,
-  `memory-disconnect-en-390.png`, `memory-read-error-en-390.png`: repair and confirmation surfaces.
+This is focused local visual evidence, not a replacement for full CI, authenticated deployed
+acceptance, real GitHub authorization/publication, or exhaustive accessibility testing.
 
 The prior review is [product Issue 1019](https://github.com/first-tree-ai/opentag/issues/1019).
-This implementation is independent of the Overview Schedule PR and preserves its existing checkout.
-
-
-## Shared-component contract correction
-
-CI caught the native recovery disclosure through the unchanged Kumo contract. Recovery guidance now uses
-the existing shared Collapsible and Button adapters. The combined component, page/query, catalog and Kumo
-contract run passes all 45 tests. `recovery-disclosure.json` records eight English/Chinese four-width checks:
-Enter/Space expands and collapses the help, expanded content fits, and creation remains locked with exactly
-one submitted operation. The updated uncertain-state screenshot and Chinese 320px expanded-help capture
-show this final implementation. This local correction still requires new-head CI.

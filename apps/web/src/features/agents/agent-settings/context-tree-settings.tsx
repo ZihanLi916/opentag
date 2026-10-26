@@ -166,10 +166,7 @@ function ContextTreeSettingsForm({
       if (action === "connect")
         setUncertainCreations((previous) => removeUncertainCreation(previous, entry.repository));
       completeOperation(action, entry);
-      return;
     }
-    if (response.code === "publication_uncertain" && action === "create")
-      setUncertainCreations((previous) => addUncertainCreation(previous, entry));
   }
   async function run(action: ContextTreeOperationRequest["action"], entry: ContextTreeConnection) {
     if (inFlight.current) return;
@@ -184,7 +181,10 @@ function ContextTreeSettingsForm({
         expectedRevision: config.revision,
         expectedRuntimeConfigRevision: config.runtimeConfig.revision,
       });
-      if (!mounted.current || latestRevision.current !== currentRevision) return;
+      if (!mounted.current) return;
+      if (response.status === "failed" && response.code === "publication_uncertain" && action === "create")
+        setUncertainCreations((previous) => addUncertainCreation(previous, entry));
+      if (latestRevision.current !== currentRevision) return;
       applyOperationResponse(action, entry, response);
       if (operationRefreshesConfig(response)) onChanged();
     } finally {

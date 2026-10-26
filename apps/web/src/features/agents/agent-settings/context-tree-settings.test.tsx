@@ -336,6 +336,31 @@ it.each(["agent", "revision"])("ignores pending responses after a change of %s",
   expect(screen.queryByText("Context Tree settings saved.")).toBeNull();
 });
 
+it("retains an uncertain creation that resolves after a config revision change", async () => {
+  let resolve!: (value: ContextTreeOperationResponse) => void;
+  const operation = vi.spyOn(browserApi, "contextTreeOperation").mockReturnValue(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  const changed = vi.fn();
+  const initial = config();
+  const view = render(<ContextTreeSettings config={initial} online onChanged={changed} />);
+  await openForm("create");
+  enter("acme/revision-race");
+  submit("create");
+
+  view.rerender(<ContextTreeSettings config={{ ...initial, revision: 4 }} online onChanged={changed} />);
+  await act(async () => resolve({ status: "failed", code: "publication_uncertain" }));
+
+  const create = screen.getByRole("button", { name: "Create and connect" });
+  expect((create as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("alert").textContent).toMatch(/Check the repository before creating again/);
+  fireEvent.click(create);
+  expect(operation).toHaveBeenCalledOnce();
+  expect(changed).not.toHaveBeenCalled();
+});
+
 it("confirms the exact source, initially focuses Cancel and sends nothing on cancel", async () => {
   const operation = vi.spyOn(browserApi, "contextTreeOperation");
   render(<ContextTreeSettings config={config("agent-a", "acme/memory")} online onChanged={vi.fn()} />);

@@ -76,6 +76,8 @@ While an outcome remains uncertain, creation of that repository is disabled, inc
 repository or closing and reopening the dialog. A successful connection clears only the matching unresolved
 repository. Open repository and Connect existing are explicit recovery actions; the latter prefills the matching
 repository without issuing a request and moves focus to its input. Recovery guidance is secondary to those actions.
+An uncertain create response is recorded even if a background config refresh changes the revision while the request
+is pending; other stale response state is still discarded.
 Retrying an already connected tree is idempotent.
 
 ## Preparation
