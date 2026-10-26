@@ -1,55 +1,71 @@
-# Memory single-tree journey acceptance
+# Agent Memory redesign acceptance record
 
-## Current behavior
+## Current layout
 
-The shared PageHeader has no Add action or capacity counter. The centered empty state offers Connect
-Context Tree and Local-only Create Context Tree. A saved Context Tree shows its repository/directory,
-branch and GitHub link. A quiet trailing Connect another Context Tree row sits inside the collection;
-it is hidden at the existing limit. Cloud opens Connect directly. This is a saved selection, never a
-runtime-ready claim.
+Memory uses the shared resource PageHeader without a primary action. A typical Agent's single
+Context Tree appears as a divided collection row; connecting another tree is a secondary action at
+the end of that collection and disappears at the 32-tree limit. The empty state keeps direct
+Connect Context Tree and Create Context Tree shortcuts. English consistently uses Context Tree and
+Chinese consistently uses 知识树.
 
-Disconnect confirms the exact tree and preservation impact, starts on Cancel, blocks duplicate writes
-and pending dismissal, retains failures and returns focus to a surviving row or the empty shortcut.
-First connection focuses the trailing action. Reaching the limit returns to a surviving row rather
-than the hidden action. Revision checks and Agent/mount boundaries remain intact.
+Disconnect identifies the exact Context Tree, blocks duplicate submissions, and restores focus to
+a surviving collection action. Creation outcomes that are unknown are retained by case-insensitive
+repository identity, including when a background config refresh changes the revision before the
+response arrives. A confirmed connection clears only the matching unresolved repository.
 
-Unresolved creates are retained independently by case-insensitive repository identity. A→B→A stays
-locked, reopening preserves the lock, and only a confirmed matching connection clears it. A late
-publication_uncertain response still records its lock after a config revision refresh, while stale
-success and old-Agent responses remain ignored. Recovery prefills and focuses the repository input;
-it never automatically writes. Expanded guidance uses shared Collapsible and Button.
+## Current screenshots
 
-Transient refresh errors appear below the page title, preserve drafts and disable unconfirmed writes.
-Terminal authorization/resource errors hide stale settings. Pause/offline repair links retain drafts
-in the original tab. The English Context Tree / Chinese 知识树 terminology is consistent.
+These screenshots were captured on 2026-10-26 from the production App/router/shell fixture and a
+production Web build whose rendered UI is based on `1c44c89588ae4628eabc6b0a6878337c3e46d489`.
+The capture working tree also contained only the later nonvisual uncertainty-race correction. Account,
+Computer, Agent config, and repository data are synthetic; the fixture makes no real repository,
+connection, or runtime mutation.
+
+- [English connected, 1440 × 1000](memory-final-en-1440-connected.png) — one Context Tree and the
+  in-collection **Connect another Context Tree** action.
+- [English empty, 1440 × 1000](memory-final-en-1440-empty.png) — the single-tree-first empty state.
+- [Chinese connected, 390 × 1000](memory-final-zh-390-connected.png) — the responsive collection and
+  secondary **连接另一棵知识树** action.
+- [Chinese empty, 390 × 1000](memory-final-zh-390-empty.png) — responsive empty-state shortcuts.
+- [Chinese connect dialog, 320 × 1000](memory-final-connect-zh-320.png) — the narrow repository and
+  directory form opened from the collection action.
+
+The pre-revision screenshots, matrix, flow report, and recovery-disclosure report were removed from
+the active evidence directory; PR history preserves them without presenting the old header action and
+source counter as current behavior.
 
 ## Verification
 
-- 50 focused Memory component/page/catalog/Kumo tests passed, including the current remote limit/focus
-  cases and the late-uncertainty regression. Web typecheck, production build and fixture build passed.
-- `single-tree-matrix.json`:56 en/zh ×320/390/768/1440 state layouts (empty,connected,active,offline,
-  active/offline,Cloud,32 long-name trees) and8 connect dialogs fit without document/main overflow.
-- `single-tree-flows.json`:8 en/zh four-width A/B/A locking, exact recovery source/input focus,
-  no automatic retry, keyboard secondary menu, expanded-help fit, first-connect/last-disconnect focus.
-- `single-tree-axe.json`:4 scoped WCAG A/AA/2.1 AA scans (English desktop/Chinese mobile empty/connected)
-  found no automatic violations; this does not establish complete accessibility.
-- Raw same-origin `/favicon.ico` observations are retained separately from business API assertions.
-  No unintended business API or real external write was observed; icon loading is not accepted.
-- The first current matrix attempt found a stopped local preview (connection refused), not a product
-  failure. The preview was restored and the actual complete runs above were captured afterward.
+- `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
+  — 30 tests passed, including multiple unresolved identities, matching recovery, config-revision
+  uncertainty, operation limits, and focus restoration.
+- `pnpm --filter @opentag/web build` passed before capture. Existing browser-externalization and
+  chunk-size warnings remain.
+- Each capture was inspected at its original viewport. The connected and empty states contain the
+  expected localized labels, and the 320px dialog keeps all fields, guidance, and actions in view.
 
-## Inspectable captures
+This is focused local visual evidence, not a replacement for full CI, authenticated deployed
+acceptance, real GitHub authorization/publication, or exhaustive accessibility testing.
 
-Actual production App/router/shell/components with synthetic Account,Computer,configuration and operation
-responses. No live repository,connection or runtime preparation was performed. The refreshed PNGs in this
-commit show the current collection-local action; retired evidence was removed (Git history retains it).
+The prior review is [product Issue 1019](https://github.com/first-tree-ai/opentag/issues/1019).
 
-- `memory-after-en-1440-{empty,connected,offline-active,cloud}.png`:English desktop.
-- `memory-after-zh-390-{empty,connected,offline-active,cloud}.png`:Chinese mobile.
-- `memory-connect-zh-320.png`:narrow connection form.
-- `memory-disconnect-en-390.png`:confirmation.
-- `memory-uncertain-en-390.png` and `memory-uncertain-help-zh-320.png`:A/B/A recovery and expanded help.
 
-Current-revision native gates, CI and reviewer clearance must be observed separately at publication.
-Local results do not establish deployed acceptance or permission/runtime behavior. The PR body must embed
-these actual captures at the published revision; older header/counter screenshots are not current evidence.
+## Additional current-layout acceptance
+
+The original published `94dda10e` source, limit/focus fixes and new `memory-final-*` core captures
+are preserved. Independent en/zh four-width acceptance against the same rendered layout adds:
+
+- `single-tree-matrix.json`:56 states and8 connect-dialog widths, no page/main overflow. States cover
+  empty,connected,active,offline,combined restrictions,Cloud and32 long-name trees.
+- `single-tree-flows.json`:8 A→B→A lock/recovery flows, exact prefill/input focus, no automatic write,
+  keyboard trailing action, expanded-help fit, first-connect and last-disconnect focus.
+- `single-tree-axe.json`:4 scoped WCAG A/AA/2.1 AA scans without automatic violations; not a complete
+  accessibility acceptance.
+- New `memory-final-disconnect-en-390.png`, `memory-final-uncertain-en-390.png` and
+  `memory-final-uncertain-help-zh-320.png` show current confirmation and recovery states. Their source
+  was the same `1c44c895` UI with the nonvisual late-uncertainty fix, matching the core captures above.
+
+Raw `/favicon.ico` observations are retained separately from business API assertions. No unintended
+business API or real external write occurred. The first current-matrix attempt found the local preview
+stopped (connection refused); restoring it and capturing the complete runs resolved the harness issue.
+Native gates/new-head CI and review remain separate; no merge/deploy or live runtime acceptance.
