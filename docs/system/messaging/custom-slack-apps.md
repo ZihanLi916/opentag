@@ -21,7 +21,9 @@ The user opens the prefilled Slack creation link, chooses the Team, creates and 
 7 events, Agent-specific Events URL, writable Messages tab, and existing Interactivity callback. After saving, the user
 confirms **Verified → Save Changes** in Slack Event Subscriptions and sends the Bot a DM. No second manifest paste,
 manual App/Team/Bot ID entry, or final confirmation page is required. Existing Apps can repair their URLs/events from
-collapsed help without replacing their other configuration.
+**Having trouble?** without replacing their other configuration. The same dialog has separate connection-test,
+troubleshooting, credential-update, and connection-details views. The test view names Slack as the destination and
+asks for a direct message; connection details label App/Team IDs, the copyable Request URL, and required events.
 
 The new App's Bot name follows the Agent name within Slack's naming rules, with its exact prefilled `@name` visible
 before opening Slack. Existing Apps keep their current names. Creation recovery stays in collapsed help: check Your Apps
