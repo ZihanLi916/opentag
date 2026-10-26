@@ -27,6 +27,7 @@ contents, and machine-specific operational logs outside the repository.
 - [Cloud workspace persistence](verification/cloud-workspace-persistence.md)
 - [Context Tree integration](verification/context-tree-integration.md)
 - [Custom Slack Apps](verification/custom-slack-apps.md)
+- [Cloud delivery cancellation reads](performance/cancel-deliveries/README.md)
 - [Database disconnect recovery](verification/database-disconnect.md)
 - [Feishu setup observation consistency](verification/feishu-setup-observation.md)
 - [Feishu user MCP authorization](verification/feishu-user-mcp-authorization.md)
