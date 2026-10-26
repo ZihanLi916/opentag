@@ -18,6 +18,7 @@ import {
   Icon,
   Input,
   InputArea,
+  Text,
 } from "../ui/design-system.js";
 import { ProviderIcon } from "../ui/provider-icon.js";
 import { messagingProviderLabel } from "./provider-label.js";
@@ -75,6 +76,7 @@ function SlackCustomAppFlow({
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<SlackConfigurationView>();
   const [busy, setBusy] = useState(false);
+  const [autoResume, setAutoResume] = useState(false);
   const [savedMethod, setSavedMethod] = useState<"auto" | "manual">();
   const [error, setError] = useState<string>();
   const [panel, setPanel] = useState<SlackConnectionPanel>("test");
@@ -101,6 +103,7 @@ function SlackCustomAppFlow({
   function close() {
     if (saving.current || busy) return;
     setEditing(undefined);
+    setAutoResume(false);
     setError(undefined);
     setOpen(false);
     setPanel("test");
@@ -108,12 +111,20 @@ function SlackCustomAppFlow({
   function start() {
     if (!view) return;
     setError(undefined);
+    setAutoResume(false);
     setSavedMethod(undefined);
     setPanel("test");
     setEditing(view.allowedIntent === "create" || view.binding?.reauthorizationRequired ? view : undefined);
     setOpen(true);
   }
+  function retrySetup() {
+    if (!view) return;
+    setError(undefined);
+    setAutoResume(true);
+    setEditing(view);
+  }
   function update() {
+    setAutoResume(false);
     if (view?.allowedIntent !== "reauthorize") return;
     setError(undefined);
     setEditing(view);
@@ -129,6 +140,7 @@ function SlackCustomAppFlow({
   function finishSave(method: "auto" | "manual" = "manual") {
     if (!mounted.current) return;
     setSavedMethod(method);
+    setAutoResume(false);
     setEditing(undefined);
     setPanel("test");
     onSaved();
@@ -191,6 +203,7 @@ function SlackCustomAppFlow({
           view={view}
           editing={editing}
           busy={busy}
+          autoResume={autoResume}
           panel={panel}
           trigger={trigger}
           error={error}
@@ -200,6 +213,7 @@ function SlackCustomAppFlow({
             view.binding && (editing || panel !== "test")
               ? () => {
                   setEditing(undefined);
+                  setAutoResume(false);
                   setError(undefined);
                   setPanel(editing || panel === "details" ? "help" : "test");
                 }
@@ -214,13 +228,14 @@ function SlackCustomAppFlow({
               view={editing}
               busy={busy}
               manualOnly={manualOnly}
-              automatic={editing.allowedIntent === "create"}
+              autoResume={autoResume}
               onBusy={setBusy}
               onSave={save}
               onCancel={
                 view.binding
                   ? () => {
                       setEditing(undefined);
+                      setAutoResume(false);
                       setError(undefined);
                       setPanel("help");
                     }
@@ -242,6 +257,8 @@ function SlackCustomAppFlow({
               onUpdate={update}
               onOAuth={officialRecovery}
               savedMethod={savedMethod}
+              manualOnly={manualOnly}
+              onRetrySetup={retrySetup}
             />
           )}
         </SlackConfigurationDialog>
@@ -340,10 +357,24 @@ function SlackConfigurationFeedback({
   );
 }
 
+function slackDialogTitle(
+  view: SlackConfigurationView,
+  editing: SlackConfigurationView | undefined,
+  autoResume: boolean,
+  panel: SlackConnectionPanel,
+): string {
+  if (autoResume) return m.im_slack_retry_setup();
+  if (editing?.allowedIntent === "reauthorize")
+    return m.im_slack_update_title({ provider: messagingProviderLabel("slack") });
+  if (editing || !view.binding) return m.im_connect_slack({ provider: messagingProviderLabel("slack") });
+  return slackConnectionTitle(view, panel);
+}
+
 function SlackConfigurationDialog({
   view,
   editing,
   busy,
+  autoResume,
   panel,
   trigger,
   error,
@@ -356,6 +387,7 @@ function SlackConfigurationDialog({
   view: SlackConfigurationView;
   editing?: SlackConfigurationView;
   busy: boolean;
+  autoResume: boolean;
   panel: SlackConnectionPanel;
   trigger: RefObject<HTMLButtonElement | null>;
   error?: string;
@@ -366,16 +398,11 @@ function SlackConfigurationDialog({
   children: ReactNode;
 }) {
   const headingRef = useRef<HTMLSpanElement>(null);
-  const navigationKey = `${panel}-${editing ? "editing" : "saved"}`;
+  const navigationKey = `${panel}-${editing ? "editing" : "saved"}-${autoResume}`;
   useEffect(() => {
     if (navigationKey) headingRef.current?.focus();
   }, [navigationKey]);
-  const updating = editing?.allowedIntent === "reauthorize";
-  const title = updating
-    ? m.im_slack_update_title()
-    : editing || !view.binding
-      ? m.im_connect_slack({ provider: messagingProviderLabel("slack") })
-      : slackConnectionTitle(view, panel);
+  const title = slackDialogTitle(view, editing, autoResume, panel);
   return (
     <Dialog
       className="w-[calc(100vw-2rem)]! max-h-[calc(100dvh-4rem)]! sm:w-[36rem]! sm:max-w-xl sm:max-h-[calc(100dvh-8rem)]! sm:p-8"
@@ -386,17 +413,30 @@ function SlackConfigurationDialog({
       onBack={onBack}
       closeLabel={m.common_close_title({ title })}
       eyebrow={
-        <span className="mb-3 flex items-center gap-3 uppercase tracking-wide">
+        <span className="mb-3 flex items-center gap-3 uppercase">
           <ProviderIcon className="size-6" provider="slack" />
-          {m.im_slack_setup_label()}
+          {m.im_slack_setup_label({ provider: messagingProviderLabel("slack") })}
         </span>
       }
       title={
-        <span ref={headingRef} tabIndex={-1} className="text-2xl leading-tight tracking-tight outline-none">
+        <Text
+          as="span"
+          variant="heading"
+          headingSize="section"
+          ref={headingRef}
+          tabIndex={-1}
+          DANGEROUS_className="outline-none"
+        >
           {title}
-        </span>
+        </Text>
       }
-      description={!editing && view.binding ? slackConnectionDescription(view, panel) : undefined}
+      description={
+        autoResume
+          ? m.im_slack_retry_setup_help()
+          : !editing && view.binding
+            ? slackConnectionDescription(view, panel)
+            : undefined
+      }
     >
       <div className="grid min-w-0 gap-6">
         {view.binding ? <SlackAppIdentity view={view} /> : null}
@@ -421,7 +461,7 @@ function SlackSetupEditor({
   api,
   agentId,
   view,
-  automatic,
+  autoResume,
   manualOnly,
   busy,
   onBusy,
@@ -432,7 +472,7 @@ function SlackSetupEditor({
   agentId: string;
   view: SlackConfigurationView;
   api: SlackSetupApi;
-  automatic: boolean;
+  autoResume: boolean;
   manualOnly: boolean;
   busy: boolean;
   onBusy: (busy: boolean) => void;
@@ -440,6 +480,7 @@ function SlackSetupEditor({
   onConnected: () => Promise<void>;
   onCancel?: () => void;
 }) {
+  const automatic = view.allowedIntent === "create" || autoResume;
   const [manual, setManual] = useState(!automatic || manualOnly);
   const [result, setResult] = useState<SlackAutoSetupResponse>();
   const handleResult = useCallback((next: SlackAutoSetupResponse) => {
@@ -628,6 +669,7 @@ function SlackCredentialForm({
   const id = useId();
   const create = view.allowedIntent === "create";
   const canSave = Boolean(credentialRequest(view, token, secret));
+  const showSaveHint = !create && !canSave;
   function submit(event: FormEvent) {
     event.preventDefault();
     const input = credentialRequest(view, token, secret);
@@ -640,12 +682,8 @@ function SlackCredentialForm({
   }
   return (
     <form className="grid gap-4" onSubmit={submit} autoComplete="off">
-      {create && existingApp ? (
-        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">
-          {m.im_slack_your_apps()}
-        </a>
-      ) : create ? (
-        <SlackAppCreation agentId={agentId} view={view} />
+      {create ? (
+        <SlackAppCreation agentId={agentId} view={view} existingApp={existingApp} />
       ) : (
         <p className="text-sm text-kumo-subtle">{m.im_slack_update_help()}</p>
       )}
@@ -658,7 +696,7 @@ function SlackCredentialForm({
           target="_blank"
           rel="noreferrer"
         >
-          {m.im_slack_open_permissions()}
+          {m.im_slack_open_permissions({ provider: messagingProviderLabel("slack") })}
         </a>
       ) : null}
       <Collapsible.Root defaultOpen={create}>
@@ -676,7 +714,9 @@ function SlackCredentialForm({
           >
             <span className="grid gap-1 text-left">
               <span>{m.im_slack_change_secret()}</span>
-              <span className="text-sm font-normal text-kumo-subtle">{m.im_slack_secret_update_help()}</span>
+              <span className="text-sm font-normal text-kumo-subtle">
+                {m.im_slack_secret_update_help({ provider: messagingProviderLabel("slack") })}
+              </span>
             </span>
             <Icon name="chevron-down" />
           </Collapsible.Trigger>
@@ -700,7 +740,7 @@ function SlackCredentialForm({
           </label>
         </Collapsible.Panel>
       </Collapsible.Root>
-      {!create ? <p className="text-sm text-kumo-subtle">{m.im_slack_update_enable_save()}</p> : null}
+      {showSaveHint ? <p className="text-sm text-kumo-subtle">{m.im_slack_update_enable_save()}</p> : null}
       <div
         className={create ? "flex flex-wrap gap-3" : "flex flex-wrap justify-end gap-3 border-t border-kumo-line pt-5"}
       >
@@ -803,7 +843,15 @@ function credentialRequest(
   };
 }
 
-function SlackAppCreation({ agentId, view }: { agentId: string; view: SlackConfigurationView }) {
+function SlackAppCreation({
+  agentId,
+  view,
+  existingApp,
+}: {
+  agentId: string;
+  view: SlackConfigurationView;
+  existingApp: boolean;
+}) {
   const [fallback, setFallback] = useState<string>();
   const provider = messagingProviderLabel("slack");
   async function copy() {
@@ -815,6 +863,12 @@ function SlackAppCreation({ agentId, view }: { agentId: string; view: SlackConfi
       setFallback(text);
     }
   }
+  if (existingApp)
+    return (
+      <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer">
+        {m.im_slack_your_apps()}
+      </a>
+    );
   return (
     <div className="grid gap-3">
       <a

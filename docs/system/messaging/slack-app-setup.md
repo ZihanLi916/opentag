@@ -54,9 +54,11 @@ check the native CLI debug log under `<openTag home>/slack-management/config/log
 can leave deploy stdout empty. Continuing re-links the same private project with `--force` before retrying installation,
 so an existing local link does not block recovery with `app_found`. No raw CLI error text or credentials are sent to Web.
 
-Failed callback configuration also resumes through **Continue**, without another installation or credential
-rotation. An
-uncertain creation is stopped: inspect Slack's existing Apps and use manual binding rather than create another copy.
+While automatic setup is open, failed callback configuration resumes through **Continue**, without another installation
+or credential rotation. After reopening a saved, unverified custom App on a Local Computer, choose **Having trouble? →
+Retry automatic setup** to recover the same App’s Events and Interactivity settings. Cloud Agents, official OAuth
+bindings, and bindings requiring credential reauthorization keep their manual or OAuth recovery paths. An uncertain
+creation is stopped: inspect Slack’s existing Apps and use manual binding rather than create another copy.
 Documented pre-creation rejections (such as invalid manifests, App limits, or rate limits) allow a retry; partial or unknown
 errors remain fenced. Expiring or revoked management authorization can require a new ticket. A busy response means the
 Computer is still working: wait and continue with the same App. There is no background job or progress-polling service.
@@ -199,7 +201,8 @@ A credential-free local live acceptance checklist for a separately registered te
 Web shows one primary action for the current state. Installation failures retry the same App; only an authorization
 failure offers reauthorization. Confirmed pending requests offer **View approval** and secondary **Continue**. A denied
 request or uncertain creation never offers a new-App retry. App/Team IDs, the copyable Request URL, and the required bot
-events are in **Connection details**; setup failures retain their safe error codes.
+events are in **Connection details**. Automatic setup’s **Diagnostics** retains safe failure codes when available;
+saved-binding connection details do not report live callback health or failure codes.
 
 A saved callback shows **Waiting for your test message…** until a real signed event closes identity. The **Test your
 Slack connection** view shows the Bot once, explains that the test is a direct message in Slack, and links to **Open
@@ -234,8 +237,8 @@ Connect a Computer before configuring Slack. The creation guide and Messaging se
 
 The full Manifest is for a new App. For an existing App, add the displayed URL/events without overwriting its other
 settings; reinstall if scopes changed. Credential updates accept only changed fields, preserve blank fields and require
-at least one change. **Update credentials** is directly available in the App dialog; expand **Replace signing secret**
-only when needed. After saving, send a Bot DM. An unchanged, saved Events URL needs no repeat verification or Save
+at least one change. **Update credentials** is available under **Having trouble?** in the App dialog; expand
+**Replace signing secret** only when needed. After saving, send a Bot DM. An unchanged, saved Events URL needs no repeat verification or Save
 Changes; connection help remains available if the test message is not received. Troubleshooting groups event settings,
 credential updates, and **Connection details**. Details show the required events without claiming they are verified
 subscriptions; copy failures expose a selectable value for manual copying. Updates preserve App, Team, Bot User and Bot
