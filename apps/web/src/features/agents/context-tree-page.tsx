@@ -50,11 +50,11 @@ function ContextTreeConfig({
   if (state.kind === "ready")
     return (
       <ContextTreeSettings
-        refreshNotice={error ? <ResourceRefreshNotice error={error} onRetry={() => void query.refetch()} /> : null}
         config={state.value}
         computerKind={computerKind}
         online={online}
         unconfirmed={error !== null || query.fetchStatus === "paused"}
+        refreshNotice={error ? <ResourceRefreshNotice error={error} onRetry={() => void query.refetch()} /> : undefined}
         onChanged={() => void syncAgentQueries(queryClient, agentId)}
       />
     );

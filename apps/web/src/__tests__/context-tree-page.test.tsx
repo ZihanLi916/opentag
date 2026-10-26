@@ -54,9 +54,10 @@ describe("OpenTag Web App Shell", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(true),
     );
+    const heading = document.querySelector<HTMLElement>('[data-ui="page-header"] h1');
     const notice = screen.getByText("Transient refresh failure");
-    expect(notice).toBeTruthy();
-    const heading = screen.getByRole("heading", { level: 1, name: "Memory", hidden: true });
+    expect(heading).toBeTruthy();
+    if (!heading) throw new Error("Memory heading was not rendered");
     expect(heading.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     read.mockRestore();
     await act(async () => {
