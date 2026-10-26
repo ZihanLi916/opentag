@@ -1,10 +1,22 @@
 // @vitest-environment jsdom
 
 import type { AgentAdminConfig, ContextTreeOperationResponse } from "@opentag/shared/browser";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
+import { act, cleanup, fireEvent, render as renderDom, screen, waitFor, within } from "@testing-library/react";
+import { type ReactElement, type ReactNode, useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { browserApi } from "../../../api.js";
 import { ContextTreeSettings } from "./context-tree-settings.js";
+
+function TestRouter({ children }: { children: ReactNode }) {
+  const [router] = useState(() =>
+    createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) }),
+  );
+  return <RouterContextProvider router={router as never}>{children}</RouterContextProvider>;
+}
+function render(ui: ReactElement) {
+  return renderDom(ui, { wrapper: TestRouter });
+}
 
 function config(id = "agent-a", repository: string | null = null): AgentAdminConfig {
   return {
@@ -61,9 +73,9 @@ function submit(mode: "connect" | "create" = "connect") {
 
 it("starts with two clear choices and opens only the chosen form, returning focus on cancel", async () => {
   render(<ContextTreeSettings config={config()} online onChanged={vi.fn()} />);
-  expect(screen.getByRole("heading", { name: "Add a Context Tree" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "No Context Trees yet" })).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Add tree" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Add tree" })).toBeTruthy();
   const trigger = screen.getByRole("button", { name: "Create Context Tree" });
   trigger.focus();
   const dialog = await openForm("create");
@@ -136,6 +148,8 @@ it("renders source cards with exact GitHub links and disconnects only the chosen
   );
   fireEvent.click(screen.getByRole("button", { name: "More actions for my guide" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
+  expect(operation).not.toHaveBeenCalled();
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disconnect" }));
   await waitFor(() =>
     expect(operation).toHaveBeenCalledWith(
       "agent-a",
@@ -166,7 +180,7 @@ it("offers Add tree for connected sources and keeps Cloud limited to existing tr
 it("explains offline and pause restrictions without blocking source browsing", async () => {
   const view = render(<ContextTreeSettings config={config()} online={false} onChanged={vi.fn()} />);
   await openForm();
-  expect(screen.getByText(/Bring the Computer online/)).toBeTruthy();
+  expect(within(screen.getByRole("dialog")).getByText(/Bring the Computer online/)).toBeTruthy();
   expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(true);
   view.rerender(
     <ContextTreeSettings config={{ ...config("agent-b", "acme/tree"), status: "active" }} online onChanged={vi.fn()} />,
@@ -194,7 +208,10 @@ it("validates the fields and focuses the first invalid input without contacting 
     target: { value: "../outside" },
   });
   submit();
-  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Directory (leave empty for root)" }));
+  const directory = screen.getByRole("textbox", { name: "Directory (leave empty for root)" });
+  expect(document.activeElement).toBe(directory);
+  expect(directory.getAttribute("aria-invalid")).toBe("true");
+  expect(directory.getAttribute("aria-describedby")).toContain("path-error");
   expect(operation).not.toHaveBeenCalled();
 });
 
@@ -224,7 +241,7 @@ it.each([
   ["tree_limit_reached", /maximum number of Context Trees/],
   ["invalid_tree", /Remove symlinks such as CLAUDE.md or README.md/],
   ["repository_rejected", /may already exist/],
-  ["publication_uncertain", /If it is empty, initialize it/],
+  ["publication_uncertain", /Check the repository before creating again/],
 ] as const)("explains %s in the form's error banner", async (code, message) => {
   vi.spyOn(browserApi, "contextTreeOperation").mockResolvedValue({ status: "failed", code });
   render(<ContextTreeSettings config={config()} online onChanged={vi.fn()} />);
@@ -232,6 +249,11 @@ it.each([
   enter();
   submit();
   expect((await screen.findByRole("alert")).textContent).toMatch(message);
+  if (code === "authentication_required") {
+    const settings = screen.getByRole("link", { name: "Account settings" });
+    expect(settings.getAttribute("href")).toBe("/account");
+    expect(settings.getAttribute("target")).toBe("_blank");
+  }
 });
 
 it.each(["agent", "revision"])("ignores pending responses after a change of %s", async (change) => {
@@ -258,4 +280,135 @@ it.each(["agent", "revision"])("ignores pending responses after a change of %s",
   await act(async () => resolve({ status: "completed", repository: "acme/memory" }));
   expect(changed).not.toHaveBeenCalled();
   expect(screen.queryByText("Context Tree settings saved.")).toBeNull();
+});
+
+it("confirms the exact source, initially focuses Cancel and sends nothing on cancel", async () => {
+  const operation = vi.spyOn(browserApi, "contextTreeOperation");
+  render(<ContextTreeSettings config={config("agent-a", "acme/memory")} online onChanged={vi.fn()} />);
+  const trigger = screen.getByRole("button", { name: "More actions for memory" });
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText("acme/memory")).toBeTruthy();
+  expect(within(dialog).getByText(/unpublished work are preserved/)).toBeTruthy();
+  const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+  await waitFor(() => expect(document.activeElement).toBe(cancel));
+  fireEvent.click(cancel);
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  expect(operation).not.toHaveBeenCalled();
+});
+
+it("blocks duplicate disconnects, preserves a refused confirmation and returns focus on cancel", async () => {
+  let finish!: (result: ContextTreeOperationResponse) => void;
+  const operation = vi.spyOn(browserApi, "contextTreeOperation").mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  render(<ContextTreeSettings config={config("agent-a", "acme/memory")} online onChanged={vi.fn()} />);
+  const trigger = screen.getByRole("button", { name: "More actions for memory" });
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
+  const dialog = screen.getByRole("alertdialog");
+  const submit = within(dialog).getByRole("button", { name: "Disconnect" });
+  fireEvent.click(submit);
+  fireEvent.click(submit);
+  expect(operation).toHaveBeenCalledOnce();
+  expect((within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(within(dialog).getByText("Disconnecting…")).toBeTruthy();
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  await act(async () => finish({ status: "failed", code: "failed" }));
+  expect(await within(dialog).findByRole("alert")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+
+it("restores a persistent Add tree entry after the first successful connection", async () => {
+  vi.spyOn(browserApi, "contextTreeOperation").mockResolvedValue({ status: "completed", repository: "acme/memory" });
+  const initial = config();
+  const view = render(<ContextTreeSettings config={initial} online onChanged={vi.fn()} />);
+  await openForm();
+  enter();
+  submit();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  view.rerender(<ContextTreeSettings config={config("agent-a", "acme/memory")} online onChanged={vi.fn()} />);
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add tree" })));
+  expect(screen.getByRole("status").textContent).toBe("Context Tree settings saved.");
+});
+
+it.each([false, true])("restores a surviving target after disconnect; neighbour=%s", async (hasNeighbour) => {
+  vi.spyOn(browserApi, "contextTreeOperation").mockResolvedValue({ status: "completed", repository: null });
+  const initial = config("agent-a", "acme/memory");
+  if (hasNeighbour)
+    initial.runtimeConfig.contextTrees.push({ kind: "git", repository: "acme/next", path: ".", ref: "main" });
+  const view = render(<ContextTreeSettings config={initial} online onChanged={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "More actions for memory" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Disconnect" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  const updated = config("agent-a", hasNeighbour ? "acme/next" : null);
+  view.rerender(<ContextTreeSettings config={updated} online onChanged={vi.fn()} />);
+  const target = screen.getByRole("button", { name: hasNeighbour ? "More actions for next" : "Add tree" });
+  await waitFor(() => expect(document.activeElement).toBe(target));
+});
+
+it("keeps an uncertain repository locked across reopening and offers a prefilled connection", async () => {
+  const operation = vi
+    .spyOn(browserApi, "contextTreeOperation")
+    .mockResolvedValue({ status: "failed", code: "publication_uncertain" });
+  render(<ContextTreeSettings config={config()} online onChanged={vi.fn()} />);
+  await openForm("create");
+  enter("Acme/Memory");
+  submit("create");
+  await screen.findByRole("alert");
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("link", { name: "Open repository" }).getAttribute("href")).toBe(
+    "https://github.com/Acme/Memory",
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "GitHub owner" }), { target: { value: "acme" } });
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await openForm("create");
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Connect existing" }));
+  expect((screen.getByRole("textbox", { name: "GitHub repository link" }) as HTMLInputElement).value).toBe(
+    "https://github.com/Acme/Memory",
+  );
+  expect((screen.getByRole("textbox", { name: "Directory (leave empty for root)" }) as HTMLInputElement).value).toBe(
+    "",
+  );
+  expect(operation).toHaveBeenCalledOnce();
+});
+
+it("explains both restrictions when active and offline without claiming disconnect is available", () => {
+  render(
+    <ContextTreeSettings
+      config={{ ...config("agent-a", "acme/memory"), status: "active" }}
+      online={false}
+      onChanged={vi.fn()}
+    />,
+  );
+  expect(screen.getByText(/Pause this Agent/)).toBeTruthy();
+  expect(screen.getByText(/Bring the Computer online/)).toBeTruthy();
+  expect(screen.queryByText(/Disconnect remains available/)).toBeNull();
+  expect(screen.getByRole("link", { name: "Manage Agent" }).getAttribute("href")).toBe(
+    "/agents/agent-a/settings/manage",
+  );
+});
+
+it("preserves a form draft but disables writes while the current selection is unconfirmed", async () => {
+  const current = config();
+  const operation = vi.spyOn(browserApi, "contextTreeOperation");
+  const view = render(<ContextTreeSettings config={current} online onChanged={vi.fn()} />);
+  await openForm();
+  enter();
+  view.rerender(<ContextTreeSettings config={current} online unconfirmed onChanged={vi.fn()} />);
+  expect((screen.getByRole("textbox", { name: "GitHub repository link" }) as HTMLInputElement).value).toBe(
+    "https://github.com/acme/memory",
+  );
+  expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(true);
+  submit();
+  expect(operation).not.toHaveBeenCalled();
 });
