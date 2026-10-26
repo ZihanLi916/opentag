@@ -18,6 +18,7 @@ import * as m from "../../../paraglide/messages.js";
 import {
   Banner,
   Button,
+  Collapsible,
   Dialog,
   DropdownMenu,
   Field,
@@ -805,10 +806,14 @@ function ContextTreeResult({
     <div className="grid gap-3">
       <Banner variant="error" role="alert" description={failureMessage(result.code, cloud)} />
       {result.code === "publication_uncertain" ? (
-        <details className="text-sm text-kumo-subtle">
-          <summary className="cursor-pointer">{m.agent_settings_context_tree_recovery_help()}</summary>
-          <p className="mt-2">{m.agent_settings_context_tree_publication_help()}</p>
-        </details>
+        <Collapsible.Root>
+          <Collapsible.Trigger render={<Button variant="ghost" size="compact" />}>
+            {m.agent_settings_context_tree_recovery_help()}
+          </Collapsible.Trigger>
+          <Collapsible.Panel className="pt-2 text-sm text-kumo-subtle">
+            <p>{m.agent_settings_context_tree_publication_help()}</p>
+          </Collapsible.Panel>
+        </Collapsible.Root>
       ) : null}
       <div className="flex flex-wrap items-center gap-3 text-sm">
         {result.code === "authentication_required" ? (

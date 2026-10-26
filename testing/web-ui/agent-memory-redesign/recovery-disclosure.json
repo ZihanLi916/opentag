@@ -1,0 +1,109 @@
+{
+  "scope": "Production App fixture, synthetic API, shared Collapsible recovery disclosure",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 320,
+      "fit": {
+        "width": 288,
+        "scroll": 288,
+        "document": 320,
+        "viewport": 320
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "fit": {
+        "width": 358,
+        "scroll": 358,
+        "document": 390,
+        "viewport": 390
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "en",
+      "width": 768,
+      "fit": {
+        "width": 384,
+        "scroll": 384,
+        "document": 768,
+        "viewport": 768
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "fit": {
+        "width": 384,
+        "scroll": 384,
+        "document": 1440,
+        "viewport": 1440
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "zh",
+      "width": 320,
+      "fit": {
+        "width": 288,
+        "scroll": 288,
+        "document": 320,
+        "viewport": 320
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "zh",
+      "width": 390,
+      "fit": {
+        "width": 358,
+        "scroll": 358,
+        "document": 390,
+        "viewport": 390
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "zh",
+      "width": 768,
+      "fit": {
+        "width": 384,
+        "scroll": 384,
+        "document": 768,
+        "viewport": 768
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    },
+    {
+      "locale": "zh",
+      "width": 1440,
+      "fit": {
+        "width": 384,
+        "scroll": 384,
+        "document": 1440,
+        "viewport": 1440
+      },
+      "keyboardExpandCollapse": true,
+      "creationLocked": true,
+      "operationCount": 1
+    }
+  ]
+}

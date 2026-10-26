@@ -74,3 +74,12 @@ are rejected. It creates no real repository, connection, schedule or runtime sid
 The prior review is [product Issue 1019](https://github.com/first-tree-ai/opentag/issues/1019).
 This implementation is independent of the Overview Schedule PR and preserves its existing checkout.
 
+
+## Shared-component contract correction
+
+CI caught the native recovery disclosure through the unchanged Kumo contract. Recovery guidance now uses
+the existing shared Collapsible and Button adapters. The combined component, page/query, catalog and Kumo
+contract run passes all 45 tests. `recovery-disclosure.json` records eight English/Chinese four-width checks:
+Enter/Space expands and collapses the help, expanded content fits, and creation remains locked with exactly
+one submitted operation. The updated uncertain-state screenshot and Chinese 320px expanded-help capture
+show this final implementation. This local correction still requires new-head CI.
