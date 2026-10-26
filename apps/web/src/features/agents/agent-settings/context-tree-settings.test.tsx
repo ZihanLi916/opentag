@@ -195,6 +195,40 @@ it("hides the secondary connection action when the Context Tree limit is reached
   expect(screen.queryByRole("button", { name: "Connect another Context Tree" })).toBeNull();
 });
 
+it("restores focus to a surviving row action when the final connection removes the trailing action", async () => {
+  vi.spyOn(browserApi, "contextTreeOperation").mockResolvedValue({
+    status: "completed",
+    repository: "acme/final-memory",
+  });
+  const initial = config();
+  initial.runtimeConfig.contextTrees = Array.from({ length: CONTEXT_TREES_MAX - 1 }, (_, index) => ({
+    kind: "git" as const,
+    repository: `acme/memory-${index}`,
+    path: ".",
+    ref: "main",
+  }));
+  const changed = vi.fn();
+  const view = render(<ContextTreeSettings config={initial} online onChanged={changed} />);
+  await openForm();
+  enter("acme/final-memory");
+  submit();
+  await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+
+  const updated = structuredClone(initial);
+  updated.runtimeConfig.contextTrees.push({
+    kind: "git",
+    repository: "acme/final-memory",
+    path: ".",
+    ref: "main",
+  });
+  view.rerender(<ContextTreeSettings config={updated} online onChanged={vi.fn()} />);
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  const survivingAction = screen.getByRole("button", { name: `More actions for memory-${CONTEXT_TREES_MAX - 2}` });
+  await waitFor(() => expect(document.activeElement).toBe(survivingAction));
+  expect(screen.queryByRole("button", { name: "Connect another Context Tree" })).toBeNull();
+});
+
 it("explains offline and pause restrictions without blocking source browsing", async () => {
   const view = render(<ContextTreeSettings config={config()} online={false} onChanged={vi.fn()} />);
   await openForm();

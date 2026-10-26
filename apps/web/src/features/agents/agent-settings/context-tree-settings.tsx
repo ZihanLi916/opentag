@@ -136,7 +136,14 @@ function ContextTreeSettingsForm({
   function completeOperation(action: ContextTreeOperationRequest["action"], entry: ContextTreeConnection) {
     if (action !== "disconnect") {
       if (selected.length === 0) focusCollectionActionAfterCount.current = 1;
-      returnFocus.current = addButton.current;
+      const survivingRowButton =
+        selected.length + 1 >= CONTEXT_TREES_MAX
+          ? [...selected]
+              .reverse()
+              .map((item) => treeButtons.current.get(contextTreeIdentity(item)))
+              .find((button) => button?.isConnected && !button.disabled)
+          : undefined;
+      returnFocus.current = survivingRowButton ?? addButton.current;
       setMode(undefined);
       return;
     }
