@@ -31,6 +31,7 @@ header action or capacity counter. The centered empty state offers lightweight *
 and Local-only **Create Context Tree** shortcuts. Connected Context Trees appear as divided rows in one
 surface, with repository/directory, branch, and a direct GitHub-folder link. A trailing secondary
 **Connect another Context Tree** action keeps additional connections available inside the collection.
+The trailing action is absent at the connection limit rather than presenting an unexplained disabled control.
 These are saved selections, not runtime-ready indicators. Each choice opens a focused dialog; the
 collection does not show an inline form. Disconnect lives in the Context Tree action menu and confirms
 the exact Context Tree and preservation impact.

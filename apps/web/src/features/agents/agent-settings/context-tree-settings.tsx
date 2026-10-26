@@ -525,43 +525,41 @@ function ContextTreeCollection({
               buttonRef={(button) => onButton(entry, button)}
             />
           ))}
-          <div className="p-3">
-            {cloud ? (
-              <Button
-                ref={addButton}
-                variant="ghost"
-                disabled={pending || pauseRequired || unconfirmed || selected.length >= CONTEXT_TREES_MAX}
-                onClick={(event) => openForm("connect", event.currentTarget)}
-              >
-                <Icon name="plus" />
-                {m.agent_settings_context_tree_connect_another()}
-              </Button>
-            ) : (
-              <DropdownMenu>
-                <DropdownMenu.Trigger
-                  render={
-                    <Button
-                      ref={addButton}
-                      variant="ghost"
-                      disabled={pending || pauseRequired || unconfirmed || selected.length >= CONTEXT_TREES_MAX}
-                    />
-                  }
+          {selected.length < CONTEXT_TREES_MAX ? (
+            <div className="p-3">
+              {cloud ? (
+                <Button
+                  ref={addButton}
+                  variant="ghost"
+                  disabled={pending || pauseRequired || unconfirmed}
+                  onClick={(event) => openForm("connect", event.currentTarget)}
                 >
                   <Icon name="plus" />
                   {m.agent_settings_context_tree_connect_another()}
-                  <Icon name="chevron-down" />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content align="start">
-                  <DropdownMenu.Item onClick={() => openForm("connect")}>
-                    {m.agent_settings_context_tree_connect_existing()}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item onClick={() => openForm("create")}>
-                    {m.agent_settings_context_tree_create_new()}
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu>
-            )}
-          </div>
+                </Button>
+              ) : (
+                <DropdownMenu>
+                  <DropdownMenu.Trigger
+                    render={
+                      <Button ref={addButton} variant="ghost" disabled={pending || pauseRequired || unconfirmed} />
+                    }
+                  >
+                    <Icon name="plus" />
+                    {m.agent_settings_context_tree_connect_another()}
+                    <Icon name="chevron-down" />
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="start">
+                    <DropdownMenu.Item onClick={() => openForm("connect")}>
+                      {m.agent_settings_context_tree_connect_existing()}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item onClick={() => openForm("create")}>
+                      {m.agent_settings_context_tree_create_new()}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu>
+              )}
+            </div>
+          ) : null}
         </section>
       ) : (
         <ContextTreeEmptyState

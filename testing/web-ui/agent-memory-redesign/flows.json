@@ -1,5 +1,7 @@
 {
   "scope": "Production App/router/page and components with synthetic API",
+  "status": "retired",
+  "retiredReason": "Captured before the collection-local connection action replaced the header Add tree action and source counter.",
   "checks": {
     "connectInitialFocus": true,
     "directoryErrorAssociated": true,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { AgentAdminConfig, ContextTreeOperationResponse } from "@opentag/shared/browser";
+import { type AgentAdminConfig, CONTEXT_TREES_MAX, type ContextTreeOperationResponse } from "@opentag/shared/browser";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render as renderDom, screen, waitFor, within } from "@testing-library/react";
 import { type ReactElement, type ReactNode, useState } from "react";
@@ -180,6 +180,19 @@ it("offers a secondary collection action without a source counter and keeps Clou
   view.rerender(<ContextTreeSettings config={config("agent-b")} computerKind="cloud" online onChanged={vi.fn()} />);
   expect(screen.queryByRole("button", { name: "Create Context Tree" })).toBeNull();
   expect(screen.getByRole("button", { name: "Connect Context Tree" })).toBeTruthy();
+});
+
+it("hides the secondary connection action when the Context Tree limit is reached", () => {
+  const current = config();
+  current.runtimeConfig.contextTrees = Array.from({ length: CONTEXT_TREES_MAX }, (_, index) => ({
+    kind: "git",
+    repository: `acme/memory-${index}`,
+    path: ".",
+    ref: "main",
+  }));
+  render(<ContextTreeSettings config={current} online onChanged={vi.fn()} />);
+  expect(screen.getAllByRole("article")).toHaveLength(CONTEXT_TREES_MAX);
+  expect(screen.queryByRole("button", { name: "Connect another Context Tree" })).toBeNull();
 });
 
 it("explains offline and pause restrictions without blocking source browsing", async () => {

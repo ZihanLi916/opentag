@@ -1,5 +1,7 @@
 {
   "scope": "Production App/router/Memory page and components; synthetic API",
+  "status": "retired",
+  "retiredReason": "Captured before the collection-local connection action replaced the header Add tree action and source counter.",
   "cases": [
     {
       "locale": "en",

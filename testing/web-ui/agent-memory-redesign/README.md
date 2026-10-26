@@ -33,7 +33,7 @@ the data unconfirmed and disables writes. Terminal authorization/resource failur
 ## Local verification
 
 - Component behavior: `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
-  — 27 passed. Covers existing operations and limits plus confirmation, pending/refused disconnect,
+  — 28 passed. Covers existing operations and limits plus confirmation, pending/refused disconnect,
   first/last/neighbour focus, multiple uncertain-result identities and targeted recovery, restriction combinations
   and unconfirmed writes.
 - Page/query composition: `pnpm --filter @opentag/web test src/__tests__/context-tree-page.test.tsx`
@@ -42,17 +42,23 @@ the data unconfirmed and disables writes. Terminal authorization/resource failur
   Existing browser-externalization and chunk-size warnings remain. Local fixture build passed.
 - `pnpm check` passed, including the complexity ratchet and Context Tree verification. Existing schema-version/complexity warnings remain; publication-time native gates and CI are separate.
 
-## Browser evidence and limits
+## Retired browser evidence and limits
 
-The fixture mounts the production App, router, shell, Memory page, Kumo adapter, CSS and translations.
+The `matrix.json`, `flows.json`, and PNG screenshots in this directory were captured before the
+collection-local connection action replaced the header Add tree action and source counter. They are
+retained as historical evidence and explicitly marked retired; they do not validate the current layout.
+No replacement browser matrix was run for this revision. Current evidence is the focused component/page/catalog
+tests, the broader Web test run, typecheck, build, and repository checks recorded above.
+
+The retired fixture mounted the production App, router, shell, Memory page, Kumo adapter, CSS and translations.
 Account, Computer, configuration and operation responses are synthetic; unexpected JavaScript fetches
 are rejected. It creates no real repository, connection, schedule or runtime side effect.
 
-- `matrix.json`: English/Chinese × 320/390/768/1440px × empty, connected, active, offline,
+- Retired `matrix.json`: English/Chinese × 320/390/768/1440px × empty, connected, active, offline,
   active/offline, Cloud and 32 long-name sources: 56 combinations with no page/main overflow or
   unexpected API request. Connect dialogs fit all eight locale/width combinations after fixing
   a Directory-hint grid overflow. The original narrow-dialog finding and successful rechecks are retained.
-- `flows.json`: actual keyboard focus/Tab/Escape, field errors, authentication repair, unknown creation,
+- Retired `flows.json`: actual keyboard focus/Tab/Escape, field errors, authentication repair, unknown creation,
   first connection, delayed/confirmed/refused disconnect, and read-retry results. Four scoped WCAG
   A/AA/2.1 AA axe scans found no automatic violations. This does not establish complete accessibility.
 - A 200% CSS zoom layout check fits; this is not a native browser-zoom acceptance claim.
@@ -66,9 +72,11 @@ are rejected. It creates no real repository, connection, schedule or runtime sid
   preparation remain separate. The available dev browser previously redirected to sign-in.
   These local results do not establish that CI or deployed acceptance passed.
 
-## Screenshots
+## Retired screenshots
 
-- `memory-after-en-1440-{empty,connected,offline-active,cloud}.png`: desktop composition.
+- These screenshots show the pre-revision header Add tree action and source count where applicable; they are not
+  current UI acceptance evidence.
+- `memory-after-en-1440-{empty,connected,offline-active,cloud}.png`: retired desktop composition.
 - `memory-after-zh-390-{empty,connected,offline-active,cloud}.png`: Chinese mobile composition.
 - `memory-connect-zh-320.png`: narrow connect form after the Directory-hint fix.
 - `memory-auth-error-en-390.png`, `memory-uncertain-en-390.png`,
