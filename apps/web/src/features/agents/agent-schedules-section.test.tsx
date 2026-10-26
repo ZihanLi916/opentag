@@ -287,6 +287,71 @@ describe("AgentSchedulesSection", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it("refreshes a conflicted deletion and uses the new observed revision on explicit retry", async () => {
+    const updated = schedule({ revision: 4, enabled: false, nextTriggerAt: null, name: "Updated check" });
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: null })
+      .mockResolvedValueOnce({ items: [summaryOf(updated)], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null });
+    const details = vi.spyOn(browserApi, "agentSchedule");
+    const remove = vi
+      .spyOn(browserApi, "deleteAgentSchedule")
+      .mockRejectedValueOnce(new ApiError(409, "Revision conflict"))
+      .mockResolvedValue(undefined);
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Updated check" });
+    expect(within(dialog).getByRole("alert").textContent).toContain("This schedule changed");
+    const confirm = within(dialog).getByRole("button", { name: "Delete" });
+    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+    expect(remove).toHaveBeenCalledExactlyOnceWith(AGENT_ID, SCHEDULE_ID, 3);
+    expect(details).not.toHaveBeenCalled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(remove).toHaveBeenLastCalledWith(AGENT_ID, SCHEDULE_ID, 4));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("closes a conflicted deletion if the refreshed list no longer contains its target", async () => {
+    vi.spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: null })
+      .mockResolvedValue({ items: [], nextCursor: null });
+    const remove = vi.spyOn(browserApi, "deleteAgentSchedule").mockRejectedValue(new ApiError(409, "Conflict"));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Schedules" })));
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("blocks deletion after a failed refresh until an explicit read recovers the latest revision", async () => {
+    const updated = schedule({ revision: 5 });
+    const list = vi
+      .spyOn(browserApi, "agentSchedules")
+      .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: null })
+      .mockRejectedValueOnce(new Error("Offline"))
+      .mockResolvedValue({ items: [summaryOf(updated)], nextCursor: null });
+    const remove = vi.spyOn(browserApi, "deleteAgentSchedule").mockRejectedValue(new ApiError(409, "Conflict"));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Daily check" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = within(dialog).getByRole("button", { name: "Delete" });
+    fireEvent.click(confirm);
+    const retry = await within(dialog).findByRole("button", { name: "Retry" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(remove).toHaveBeenCalledOnce();
+    fireEvent.click(retry);
+    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+    expect(list).toHaveBeenCalledTimes(3);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(remove).toHaveBeenLastCalledWith(AGENT_ID, SCHEDULE_ID, 5));
+  });
+
   it("returns focus to the section after deleting its last schedule", async () => {
     vi.spyOn(browserApi, "agentSchedules")
       .mockResolvedValueOnce({ items: [summaryOf(schedule())], nextCursor: null })

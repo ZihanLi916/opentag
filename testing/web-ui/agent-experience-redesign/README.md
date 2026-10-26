@@ -84,3 +84,15 @@ the native screenshot scale; use the individual images for focused review.
 The original before image and final shell image have different surrounding contexts; compare the Schedule
 composition, not the entire page height as a measured improvement. Intermediate draft images are retained
 locally and excluded from the review commit.
+
+## Review corrections
+
+The locale catalog is sorted in both languages and the obsolete Show/Hide details keys are removed.
+The unchanged catalog invariant suite passes alongside the Schedule behavior suite (35 tests total).
+Three added behavior cases cover a revision conflict followed by an explicit successful retry using
+its refreshed revision, a target disappearing during refresh, and a failed refresh blocking deletion
+until the user explicitly recovers the read. The confirmation observes refreshed summaries without
+fetching the private prompt. The count now includes a screen-reader description of loaded schedules.
+
+The original responsive overview/detail screenshots remain representative: the review correction changes
+conflict recovery and accessibility text, without changing those normal-state compositions.

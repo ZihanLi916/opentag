@@ -286,6 +286,9 @@ The schedule name opens a focused detail dialog, including when reached through 
 The row action menu contains pause/resume and delete. A pending mutation prevents overlapping writes, while
 read-only details remain available. Deletion confirms the schedule and its impact, initially focuses Cancel,
 retains a refused operation inside the dialog, and returns focus to the section after a confirmed removal.
+After a revision conflict, refreshed summaries update the confirmation target before the user explicitly
+confirms again. If the target disappears, the confirmation closes and focus returns to the section.
+A failed refresh disables deletion until an explicit read recovers; stale data cannot be resubmitted.
 Closing details returns focus to the name, or the section for a deep link without a surviving trigger.
 Switching Agents closes any open detail or confirmation. Failed list refreshes retain loaded rows and expose
 Retry. A failed initial read does not masquerade as an empty list. The empty state explains that schedules are

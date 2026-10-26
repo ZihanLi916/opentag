@@ -51,6 +51,18 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
   const rows = deepLinkedItem ? [deepLinkedItem, ...loaded] : loaded;
   const selectedItem = rows.find((item) => item.id === expandedId);
 
+  useEffect(() => {
+    if (!deleteTarget || list.isFetching || list.isError) return;
+    const current = rows.find((item) => item.id === deleteTarget.id);
+    if (current) {
+      if (current !== deleteTarget) setDeleteTarget(current);
+    } else {
+      deleteReturnFocus.current = headingRef.current;
+      setDeleteTarget(undefined);
+      setMutationError(undefined);
+    }
+  }, [deleteTarget, rows, list.isFetching, list.isError]);
+
   async function changeSchedule(item: AgentScheduleListItem, operation: "pause" | "resume") {
     if (mutationInFlight.current) return;
     mutationInFlight.current = true;
@@ -86,7 +98,7 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
 
   async function deleteSchedule() {
     const item = deleteTarget;
-    if (!item || mutationInFlight.current) return;
+    if (!item || mutationInFlight.current || list.isError || list.isFetching) return;
     mutationInFlight.current = true;
     setMutationError(undefined);
     setPendingId(item.id);
@@ -108,8 +120,12 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
       deleteReturnFocus.current = headingRef.current;
       setDeleteTarget(undefined);
       await queryClient.invalidateQueries({ queryKey: listKey });
-    } catch {
-      setMutationError(m.agents_schedules_mutation_error());
+    } catch (error) {
+      setMutationError(
+        error instanceof ApiError && error.status === 409
+          ? m.agents_schedules_delete_conflict()
+          : m.agents_schedules_mutation_error(),
+      );
       await queryClient.invalidateQueries({ queryKey: listKey });
       await queryClient.invalidateQueries({ queryKey: queryKeys.agents.schedule(agentId, item.id) });
     } finally {
@@ -176,6 +192,9 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
       <ScheduleDeleteDialog
         item={deleteTarget}
         busy={deleteTarget !== undefined && pendingId === deleteTarget.id}
+        unconfirmed={list.isError || list.isFetching}
+        refreshFailed={list.isError}
+        onRefresh={() => void list.refetch()}
         error={mutationError}
         returnFocusRef={deleteReturnFocus}
         onClose={() => {
@@ -244,8 +263,8 @@ function ScheduleHeader({
       </Text>
       {count ? (
         <span className="text-sm tabular-nums text-kumo-subtle">
-          {count}
-          {hasMore ? "+" : ""}
+          <span aria-hidden="true">{`${count}${hasMore ? "+" : ""}`}</span>
+          <span className="sr-only">{m.agents_schedules_loaded_count({ count: `${count}${hasMore ? "+" : ""}` })}</span>
         </span>
       ) : null}
     </header>
@@ -404,6 +423,9 @@ function ScheduleDeleteDialog({
   item,
   busy,
   error,
+  unconfirmed,
+  refreshFailed,
+  onRefresh,
   onClose,
   onConfirm,
   returnFocusRef,
@@ -411,6 +433,9 @@ function ScheduleDeleteDialog({
   item?: AgentScheduleListItem;
   busy: boolean;
   error?: string;
+  unconfirmed: boolean;
+  refreshFailed: boolean;
+  onRefresh: () => void;
   onClose: () => void;
   onConfirm: () => void;
   returnFocusRef: RefObject<HTMLElement | null>;
@@ -432,11 +457,19 @@ function ScheduleDeleteDialog({
           {error}
         </Banner>
       ) : null}
+      {refreshFailed && !busy ? (
+        <Banner
+          variant="alert"
+          role="status"
+          description={m.agents_schedules_list_error()}
+          action={<Banner.Action onClick={onRefresh}>{m.common_retry()}</Banner.Action>}
+        />
+      ) : null}
       <div className="flex justify-end gap-2">
         <Button ref={cancelRef} disabled={busy} onClick={onClose} variant="ghost">
           {m.common_cancel()}
         </Button>
-        <Button disabled={busy} loading={busy} onClick={onConfirm} variant="danger">
+        <Button disabled={busy || unconfirmed} loading={busy} onClick={onConfirm} variant="danger">
           {m.agents_schedules_delete()}
         </Button>
       </div>
