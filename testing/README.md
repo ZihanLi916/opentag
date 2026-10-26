@@ -11,6 +11,7 @@ contents, and machine-specific operational logs outside the repository.
 - [Cloud Computer acceptance harness](cloud-computer.md)
 - [Managed CLI installation acceptance](managed-cli-entry/README.md)
 - [Slack local live acceptance](slack-live-acceptance.md)
+- [Agent usage and internal Session page benchmark](performance/agent-session/REPORT.md)
 
 ## Verification by feature
 
