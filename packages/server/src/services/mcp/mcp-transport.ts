@@ -8,6 +8,7 @@ import {
   type MCPProtocolEra,
 } from "@opentag/shared";
 import { boundedMcpSummary, MCP_ERROR_CODES, McpServiceError } from "./errors.js";
+import { type McpHeaderParameter, parseMcpParameterHeaders } from "./mcp-parameter-headers.js";
 import type { McpFetchResponse, McpOutboundFetcher } from "./mcp-url-policy.js";
 
 /**
@@ -110,6 +111,7 @@ export interface McpCallOptions {
   name?: string;
   /** Extra request headers beyond the authorization set (used for `Mcp-Param-*` extensions). */
   headers?: Record<string, string>;
+  inputSchema?: unknown;
   /**
    * The version `initialize` negotiated, for a legacy call.
    *
@@ -128,13 +130,54 @@ export interface McpCallOptions {
 export function encodeHeaderValue(value: string): string {
   // Every UTF-16 code unit in the printable-ASCII range, which is what may travel raw.
   const isPrintableAscii = /^[\u0020-\u007e]*$/.test(value);
-  if (isPrintableAscii && !value.startsWith("=?base64?")) return value;
+  if (isPrintableAscii && value.trim() === value && !value.startsWith("=?base64?")) return value;
   return `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
 export function decodeHeaderValue(value: string): string {
   const match = /^=\?base64\?(.+)\?=$/.exec(value);
   return match?.[1] ? Buffer.from(match[1], "base64").toString("utf8") : value;
+}
+
+function parameterHeaders(inputSchema: unknown, args: unknown): Record<string, string> {
+  const parsed = parseMcpParameterHeaders(inputSchema);
+  if (!parsed.valid) {
+    throw new McpTransportError(
+      MCP_ERROR_CODES.UPSTREAM_ERROR,
+      `The MCP tool has invalid parameter header metadata: ${parsed.reason}`,
+    );
+  }
+  const headers: Record<string, string> = {};
+  for (const parameter of parsed.parameters) {
+    const value = parameterValue(args, parameter.path);
+    if (value === undefined || value === null) continue;
+    headers[`Mcp-Param-${parameter.name}`] = parameterHeaderValue(parameter, value);
+  }
+  return headers;
+}
+
+function parameterValue(args: unknown, path: readonly string[]): unknown {
+  let value = args;
+  for (const key of path) {
+    if (!isRecord(value) || !Object.hasOwn(value, key)) return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+function parameterHeaderValue(parameter: McpHeaderParameter, value: unknown): string {
+  const { type, path } = parameter;
+  const valid =
+    (type === "string" && typeof value === "string") ||
+    (type === "boolean" && typeof value === "boolean") ||
+    (type === "integer" && typeof value === "number" && Number.isSafeInteger(value));
+  if (!valid) {
+    throw new McpTransportError(
+      MCP_ERROR_CODES.UPSTREAM_ERROR,
+      `An MCP parameter header at ${JSON.stringify(path).slice(0, 160)} requires its declared primitive type`,
+    );
+  }
+  return encodeHeaderValue(String(value));
 }
 
 export class McpTransport {
@@ -183,6 +226,7 @@ export class McpTransport {
     const name = options.name ?? paramsName(params);
     if (name !== undefined) headers["Mcp-Name"] = encodeHeaderValue(name);
     for (const [key, value] of Object.entries(options.headers ?? {})) headers[key] = value;
+    if (method === "tools/call") Object.assign(headers, parameterHeaders(options.inputSchema, params?.arguments));
 
     const body = JSON.stringify({
       jsonrpc: "2.0",
