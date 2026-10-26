@@ -1,0 +1,3 @@
+Run ID: 20261026-local-04
+Disposable GitHub MCP staging acceptance fixture.
+Test marker: 20261026-local-04:file:acceptance-v1
