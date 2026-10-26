@@ -52,7 +52,7 @@ async function openForm(mode: "connect" | "create" = "connect") {
   const button = screen.queryByRole("button", { name });
   if (button) fireEvent.click(button);
   else {
-    fireEvent.click(screen.getByRole("button", { name: "Add tree" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add another Context Tree" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) }));
   }
   return screen.findByRole("dialog", { name });
@@ -75,7 +75,7 @@ it("starts with two clear choices and opens only the chosen form, returning focu
   render(<ContextTreeSettings config={config()} online onChanged={vi.fn()} />);
   expect(screen.getByRole("heading", { name: "No Context Trees yet" })).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
-  expect(screen.getByRole("button", { name: "Add tree" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Add another Context Tree" })).toBeNull();
   const trigger = screen.getByRole("button", { name: "Create Context Tree" });
   trigger.focus();
   const dialog = await openForm("create");
@@ -163,7 +163,7 @@ it("renders source cards with exact GitHub links and disconnects only the chosen
   );
 });
 
-it("offers Add tree for connected sources and keeps Cloud limited to existing trees", async () => {
+it("offers Add another Context Tree for connected sources and keeps Cloud limited to existing trees", async () => {
   const view = render(
     <ContextTreeSettings config={config("agent-a", "acme/memory")} computerKind="cloud" online onChanged={vi.fn()} />,
   );
@@ -186,7 +186,7 @@ it("explains offline and pause restrictions without blocking source browsing", a
     <ContextTreeSettings config={{ ...config("agent-b", "acme/tree"), status: "active" }} online onChanged={vi.fn()} />,
   );
   expect(screen.getByText(/Pause this Agent/)).toBeTruthy();
-  expect((screen.getByRole("button", { name: "Add tree" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Add another Context Tree" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByRole("link", { name: "Open tree on GitHub" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "More actions for tree" }));
   expect((await screen.findByRole("menuitem", { name: "Disconnect" })).getAttribute("aria-disabled")).toBe("true");
@@ -324,7 +324,7 @@ it("blocks duplicate disconnects, preserves a refused confirmation and returns f
   await waitFor(() => expect(document.activeElement).toBe(trigger));
 });
 
-it("restores a persistent Add tree entry after the first successful connection", async () => {
+it("focuses the stable Memory region after the first successful connection", async () => {
   vi.spyOn(browserApi, "contextTreeOperation").mockResolvedValue({ status: "completed", repository: "acme/memory" });
   const initial = config();
   const view = render(<ContextTreeSettings config={initial} online onChanged={vi.fn()} />);
@@ -333,7 +333,7 @@ it("restores a persistent Add tree entry after the first successful connection",
   submit();
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   view.rerender(<ContextTreeSettings config={config("agent-a", "acme/memory")} online onChanged={vi.fn()} />);
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add tree" })));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("region", { name: "Memory" })));
   expect(screen.getByRole("status").textContent).toBe("Context Tree settings saved.");
 });
 
@@ -349,7 +349,9 @@ it.each([false, true])("restores a surviving target after disconnect; neighbour=
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   const updated = config("agent-a", hasNeighbour ? "acme/next" : null);
   view.rerender(<ContextTreeSettings config={updated} online onChanged={vi.fn()} />);
-  const target = screen.getByRole("button", { name: hasNeighbour ? "More actions for next" : "Add tree" });
+  const target = hasNeighbour
+    ? screen.getByRole("button", { name: "More actions for next" })
+    : screen.getByRole("region", { name: "Memory" });
   await waitFor(() => expect(document.activeElement).toBe(target));
 });
 
@@ -378,6 +380,9 @@ it("keeps an uncertain repository locked across reopening and offers a prefilled
   );
   expect((screen.getByRole("textbox", { name: "Directory (leave empty for root)" }) as HTMLInputElement).value).toBe(
     "",
+  );
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "GitHub repository link" })),
   );
   expect(operation).toHaveBeenCalledOnce();
 });
@@ -411,4 +416,39 @@ it("preserves a form draft but disables writes while the current selection is un
   expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(true);
   submit();
   expect(operation).not.toHaveBeenCalled();
+});
+
+it("retains both unresolved repositories across A, B, and case-insensitive A retry, clearing only confirmed connections", async () => {
+  const operation = vi
+    .spyOn(browserApi, "contextTreeOperation")
+    .mockResolvedValueOnce({ status: "failed", code: "publication_uncertain" })
+    .mockResolvedValueOnce({ status: "failed", code: "publication_uncertain" })
+    .mockResolvedValueOnce({ status: "completed", repository: "Acme/Memory" });
+  render(<ContextTreeSettings config={config()} online onChanged={vi.fn()} />);
+  await openForm("create");
+  enter("Acme/Memory");
+  submit("create");
+  await screen.findByRole("alert");
+  enter("Acme/Other");
+  submit("create");
+  await screen.findByRole("alert");
+  expect(operation).toHaveBeenCalledTimes(2);
+  enter("acme/memory");
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(true);
+  submit("create");
+  expect(operation).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("link", { name: "Open repository" }).getAttribute("href")).toBe(
+    "https://github.com/Acme/Memory",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect existing" }));
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "GitHub repository link" })),
+  );
+  submit();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await openForm("create");
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(false);
+  enter("ACME/OTHER");
+  expect((screen.getByRole("button", { name: "Create and connect" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(operation).toHaveBeenCalledTimes(3);
 });

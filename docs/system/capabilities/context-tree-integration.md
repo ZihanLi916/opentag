@@ -26,16 +26,18 @@ case-insensitive; directory and branch names are case-sensitive. Names shown in
 settings come from the directory or repository. Multiple directories or branches
 in one repository are allowed. Array order gives no tree precedence.
 
-Memory uses the same page header and collection layout as other Agent resources. **Add tree**
-remains in the header in empty and populated states. The centered empty state offers lightweight
+Memory uses the same page header and collection layout as other Agent resources. The header
+keeps the focus on the Agent's memory. A secondary **Add another Context Tree** menu below an
+existing selection supports additional sources without emphasizing a capacity counter.
+The centered empty state offers lightweight
 **Connect Context Tree** and Local-only **Create Context Tree** shortcuts. Connected sources appear
-as divided rows in one surface, with an accurate source count, repository/directory, branch,
+as divided rows in one surface, with repository/directory, branch,
 and a direct GitHub-folder link. These are saved selections, not runtime-ready indicators.
 Each choice opens a focused dialog; the collection does not show an inline form.
 Disconnect lives in the source action menu and confirms the exact source and preservation impact.
 Cancel receives initial focus, pending requests block dismissal and repeated submissions, and failures
-stay inside the confirmation. A confirmed removal returns focus to a surviving neighbour or Add tree.
-Successful first connections also return focus to Add tree and leave visible, concise feedback.
+stay inside the confirmation. A confirmed removal returns focus to a surviving neighbour or the
+stable Memory region. Successful first connections also focus that region and leave concise feedback.
 
 Connect accepts a GitHub repository link and an optional relative directory; an empty
 directory means the repository root. GitHub’s default branch is resolved during verification
@@ -68,10 +70,12 @@ Repository creation never adopts or overwrites an existing repository. Remote wr
 not retried automatically. Rejected repository names prompt the user to choose another name or
 connect an existing tree. An uncertain creation asks the user to inspect GitHub: connect a valid
 tree, initialize and push the files if the repository is empty, or delete the empty repository
-before retrying creation. While a creation outcome remains uncertain, unchanged repository creation is
-disabled, including after closing and reopening the dialog. Open repository and Connect existing are explicit
-recovery actions; the latter prefills the submitted source without issuing a request. Recovery guidance is
-secondary to those actions. Retrying an already connected tree is idempotent.
+before retrying creation. Unresolved attempts are retained independently by case-insensitive repository
+identity for the mounted Agent page. Switching to another repository, changing case, or reopening the dialog
+does not unlock an earlier uncertain creation. A confirmed connection clears only that repository's attempt.
+Open repository and Connect existing are explicit recovery actions; the latter prefills the submitted source
+and focuses the repository input without issuing a request. Recovery guidance is secondary to those actions.
+Retrying an already connected tree is idempotent.
 
 ## Preparation
 

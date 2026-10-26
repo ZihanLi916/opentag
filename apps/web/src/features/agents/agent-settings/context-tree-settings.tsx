@@ -11,7 +11,7 @@ import {
   contextTreeSelector,
 } from "@opentag/shared/browser";
 import { Link } from "@tanstack/react-router";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { browserApi } from "../../../api.js";
 import { PageHeader } from "../../../components/kumo/page-header/page-header.js";
 import * as m from "../../../paraglide/messages.js";
@@ -40,12 +40,14 @@ function ContextTreeSettingsForm({
   online,
   onChanged,
   unconfirmed = false,
+  refreshNotice,
 }: {
   config: AgentAdminConfig;
   computerKind?: "local" | "cloud";
   online: boolean;
   onChanged: () => void;
   unconfirmed?: boolean;
+  refreshNotice?: ReactNode;
 }) {
   const [mode, setMode] = useState<TreeAction>();
   const [draft, setDraft] = useState({ owner: "", name: "" });
@@ -53,13 +55,21 @@ function ContextTreeSettingsForm({
   const [path, setPath] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<ContextTreeConnection>();
-  const [uncertainCreation, setUncertainCreation] = useState<ContextTreeConnection>();
+  const [uncertainCreations, setUncertainCreations] = useState<Record<string, ContextTreeConnection>>({});
   const [resultSource, setResultSource] = useState<ContextTreeConnection>();
   const ownerInput = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const repositoryInput = useRef<HTMLInputElement>(null);
   const pathInput = useRef<HTMLInputElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
+  const page = useRef<HTMLElement>(null);
+  const focusConnection = useRef(false);
+  useEffect(() => {
+    if (mode === "connect" && focusConnection.current) {
+      focusConnection.current = false;
+      repositoryInput.current?.focus();
+    }
+  });
   const returnFocus = useRef<HTMLElement | null>(null);
   const disconnectReturnFocus = useRef<HTMLElement | null>(null);
   const treeButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -86,13 +96,13 @@ function ContextTreeSettingsForm({
   const activeMode = mode ?? "connect";
   const { source, valid, ownerValid, nameValid, linkedRepository } = parseForm(activeMode, draft, repositoryUrl, path);
   const fieldId = `context-tree-${config.id}`;
-  const creationUncertain =
-    activeMode === "create" && uncertainCreation?.repository.toLowerCase() === source.repository.toLowerCase();
+  const uncertainCreation = uncertainCreations[source.repository.toLowerCase()];
+  const creationUncertain = activeMode === "create" && uncertainCreation !== undefined;
   const formResult = currentFormResult(result, creationUncertain);
   const recoverySource = currentRecoverySource(result, resultSource, uncertainCreation);
 
   function openForm(next: TreeAction, trigger?: HTMLElement | null) {
-    returnFocus.current = trigger ?? addButton.current;
+    returnFocus.current = trigger ?? addButton.current ?? page.current;
     setMode(next);
     setSubmitted(false);
     setResult(undefined);
@@ -116,7 +126,13 @@ function ContextTreeSettingsForm({
   }
   function completeOperation(action: ContextTreeOperationRequest["action"], entry: ContextTreeConnection) {
     if (action !== "disconnect") {
-      returnFocus.current = addButton.current;
+      returnFocus.current = page.current;
+      if (action === "connect")
+        setUncertainCreations((previous) => {
+          const remaining = { ...previous };
+          delete remaining[entry.repository.toLowerCase()];
+          return remaining;
+        });
       setMode(undefined);
       return;
     }
@@ -125,7 +141,7 @@ function ContextTreeSettingsForm({
     disconnectReturnFocus.current =
       neighbours
         .map((item) => treeButtons.current.get(contextTreeIdentity(item)))
-        .find((button) => button?.isConnected && !button.disabled) ?? addButton.current;
+        .find((button) => button?.isConnected && !button.disabled) ?? page.current;
     setDisconnectTarget(undefined);
   }
   async function run(action: ContextTreeOperationRequest["action"], entry: ContextTreeConnection) {
@@ -145,7 +161,7 @@ function ContextTreeSettingsForm({
       setResult(response);
       if (response.status === "completed") completeOperation(action, entry);
       if (response.status === "failed" && response.code === "publication_uncertain" && action === "create")
-        setUncertainCreation(entry);
+        setUncertainCreations((previous) => ({ ...previous, [entry.repository.toLowerCase()]: entry }));
       if (operationRefreshesConfig(response)) onChanged();
     } finally {
       inFlight.current = false;
@@ -162,13 +178,15 @@ function ContextTreeSettingsForm({
     if (!entry) return;
     setRepositoryUrl(`https://github.com/${entry.repository}`);
     setPath(entry.path === "." ? "" : entry.path);
+    focusConnection.current = true;
     setMode("connect");
     setSubmitted(false);
     setResult(undefined);
   }
   return (
-    <div className="grid gap-6">
+    <section ref={page} aria-label={m.agent_settings_context_tree_title()} tabIndex={-1} className="grid gap-6">
       <ContextTreeCollection
+        refreshNotice={refreshNotice}
         agentId={config.id}
         online={online}
         selected={selected}
@@ -180,7 +198,7 @@ function ContextTreeSettingsForm({
         addButton={addButton}
         openForm={openForm}
         onDisconnect={(entry) => {
-          disconnectReturnFocus.current = treeButtons.current.get(contextTreeIdentity(entry)) ?? addButton.current;
+          disconnectReturnFocus.current = treeButtons.current.get(contextTreeIdentity(entry)) ?? page.current;
           setResult(undefined);
           setDisconnectTarget(entry);
         }}
@@ -284,7 +302,7 @@ function ContextTreeSettingsForm({
           if (disconnectTarget && !pauseRequired && !unconfirmed) void run("disconnect", disconnectTarget);
         }}
       />
-    </div>
+    </section>
   );
 }
 
@@ -429,6 +447,7 @@ function ContextTreeRestrictions({
 }
 
 function ContextTreeCollection({
+  refreshNotice,
   agentId,
   online,
   selected,
@@ -454,44 +473,18 @@ function ContextTreeCollection({
   openForm: (mode: TreeAction, trigger?: HTMLElement | null) => void;
   onDisconnect: (source: ContextTreeConnection) => void;
   onButton: (source: ContextTreeConnection, button: HTMLButtonElement | null) => void;
+  refreshNotice?: ReactNode;
 }) {
   return (
     <>
       <PageHeader
         title={m.agent_settings_context_tree_title()}
         description={m.agent_settings_context_tree_description()}
-      >
-        <DropdownMenu>
-          <DropdownMenu.Trigger
-            render={
-              <Button
-                ref={addButton}
-                disabled={pending || pauseRequired || unconfirmed || selected.length >= CONTEXT_TREES_MAX}
-              />
-            }
-          >
-            <Icon name="plus" />
-            {m.agent_settings_context_tree_add()}
-            <Icon name="chevron-down" />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Content align="end">
-            <DropdownMenu.Item onClick={() => openForm("connect")}>
-              {m.agent_settings_context_tree_connect_existing()}
-            </DropdownMenu.Item>
-            {cloud ? null : (
-              <DropdownMenu.Item onClick={() => openForm("create")}>
-                {m.agent_settings_context_tree_create_new()}
-              </DropdownMenu.Item>
-            )}
-          </DropdownMenu.Content>
-        </DropdownMenu>
-      </PageHeader>
+      />
+      {refreshNotice}
       <ContextTreeRestrictions agentId={agentId} online={online} pauseRequired={pauseRequired} />
       {selected.length ? (
         <div className="grid gap-3">
-          <p className="text-sm tabular-nums text-kumo-subtle">
-            {m.agent_settings_context_tree_count({ count: selected.length, limit: CONTEXT_TREES_MAX })}
-          </p>
           <section
             aria-label={m.agent_settings_context_tree_connected_heading()}
             className="ui-surface divide-y divide-kumo-line bg-kumo-base"
@@ -507,6 +500,33 @@ function ContextTreeCollection({
               />
             ))}
           </section>
+          <div className="justify-self-start">
+            <DropdownMenu>
+              <DropdownMenu.Trigger
+                render={
+                  <Button
+                    ref={addButton}
+                    variant="secondary"
+                    disabled={pending || pauseRequired || unconfirmed || selected.length >= CONTEXT_TREES_MAX}
+                  />
+                }
+              >
+                <Icon name="plus" />
+                {m.agent_settings_context_tree_add_another()}
+                <Icon name="chevron-down" />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="start">
+                <DropdownMenu.Item onClick={() => openForm("connect")}>
+                  {m.agent_settings_context_tree_connect_existing()}
+                </DropdownMenu.Item>
+                {cloud ? null : (
+                  <DropdownMenu.Item onClick={() => openForm("create")}>
+                    {m.agent_settings_context_tree_create_new()}
+                  </DropdownMenu.Item>
+                )}
+              </DropdownMenu.Content>
+            </DropdownMenu>
+          </div>
         </div>
       ) : (
         <ContextTreeEmptyState cloud={cloud} pending={pending || unconfirmed} onChoose={openForm} />
