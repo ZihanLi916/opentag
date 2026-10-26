@@ -178,6 +178,16 @@ status. A failed probe and a legacy fallback each write one `info` line carrying
 readable in the service log. Every probe log line identifies the Server by `endpoint`, the URL origin only,
 because an endpoint path or query can carry a credential that the logger's key-name redaction does not catch.
 
+A caller's cancellation reaches all three hops. The gateway forwards the `AbortSignal` it was given
+to `initialize`, to `notifications/initialized`, and to the `tools/call`, so a cancelled turn cannot
+leave a legacy peer part-way through a handshake opened for an answer nobody will read. A signal
+that is already aborted sends nothing at all: no `initialize`, so no session is opened and then
+abandoned, and no notification. One that fires during the handshake ends the call at the hop in
+flight, and the hops after it are never sent — in particular the `tools/call`, which is the request
+that can have a side effect. This is the outbound policy's cancellation rule ("a cancelled call is
+not dialed") applied per hop rather than only to the request the caller named. A probe is bounded by
+its own deadline and takes no caller signal, so none of this makes a probe cancellable.
+
 A dual-endpoint HTTP+SSE Server (2024-11-05) is reported as `MCP_TRANSPORT_UNSUPPORTED` rather than
 being half-supported.
 
