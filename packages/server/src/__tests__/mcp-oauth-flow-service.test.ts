@@ -3,6 +3,7 @@ import {
   CANVA_DEVELOPER_PORTAL_AUTHORIZATION_SERVER,
   CANVA_DEVELOPER_PORTAL_MCP_URL,
   GOOGLE_WORKSPACE_MCP_AUTHORIZATION_SERVER,
+  type McpStaticOAuthBrand,
 } from "@opentag/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,9 +119,7 @@ function build(
   options: {
     now?: () => Date;
     googleMcpClient?: { clientId: string; clientSecret: string };
-    staticMcpClients?: Partial<
-      Record<"canva" | "hubspot" | "asana" | "zoom", { clientId: string; clientSecret: string }>
-    >;
+    staticMcpClients?: Partial<Record<McpStaticOAuthBrand, { clientId: string; clientSecret: string }>>;
   } = {},
 ) {
   const { calls, fetchImpl } = oauthNode(routes);
@@ -640,6 +639,14 @@ describe("McpOAuthFlowService.start", () => {
 
   describe.each([
     {
+      brand: "github" as const,
+      mcpUrl: "https://api.githubcopilot.com/mcp/",
+      prmUrl: "https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp",
+      issuer: "https://github.com/login/oauth",
+      tokenUrl: "https://github.com/login/oauth/access_token",
+      method: "post",
+    },
+    {
       brand: "hubspot" as const,
       mcpUrl: "https://mcp.hubspot.com",
       prmUrl: "https://mcp.hubspot.com/.well-known/oauth-protected-resource",
@@ -667,23 +674,31 @@ describe("McpOAuthFlowService.start", () => {
     const client = { clientId: `${brand}-client-id`, clientSecret: `${brand}-client-secret` };
     const routes = (): RouteMap => ({
       [prmUrl]: doc({ resource: mcpUrl, authorization_servers: [issuer] }),
-      [`${issuer}/.well-known/oauth-authorization-server`]: doc({
-        issuer,
-        authorization_endpoint: `${issuer}/oauth/authorize`,
-        token_endpoint: tokenUrl,
-        response_types_supported: ["code"],
-        code_challenge_methods_supported: ["S256"],
-      }),
+      [new URL(`/.well-known/oauth-authorization-server${new URL(issuer).pathname.replace(/\/$/, "")}`, issuer).href]:
+        doc({
+          issuer,
+          authorization_endpoint: brand === "github" ? `${issuer}/authorize` : `${issuer}/oauth/authorize`,
+          token_endpoint: tokenUrl,
+          response_types_supported: ["code"],
+          code_challenge_methods_supported: ["S256"],
+          ...(brand === "github"
+            ? { scopes_supported: ["offline_access"], authorization_response_iss_parameter_supported: true }
+            : {}),
+        }),
       [tokenUrl]: doc({ access_token: "at_1", refresh_token: "rt_1", expires_in: 600 }),
     });
 
     it("is presented at start, the callback and refresh, and registers nothing", async () => {
       const ids = await seed(mcpUrl);
       const { calls, flows } = build(routes(), { staticMcpClients: { [brand]: client } });
-      const started = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+      const scopes = brand === "github" ? ["repo", "offline_access"] : [];
+      const started = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, scopes, FLOW_SECRET);
       expect(new URL(started.authorizationUrl).searchParams.get("client_id")).toBe(client.clientId);
       expect(started.authorizationUrl).not.toContain(client.clientSecret);
-      await flows.callback({ code: "code-1", state: stateOf(started.authorizationUrl) }, FLOW_SECRET);
+      if (brand === "github") {
+        expect(new URL(started.authorizationUrl).searchParams.get("scope")).toBe("repo offline_access");
+      }
+      await flows.callback({ code: "code-1", state: stateOf(started.authorizationUrl), iss: issuer }, FLOW_SECRET);
       const row = await readAuthorization(ids);
       expect(row?.status).toBe("active");
       await flows.refreshAuthorization(row?.id as string);
