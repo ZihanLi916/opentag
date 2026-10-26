@@ -2,21 +2,23 @@
 
 ## Implemented behavior
 
-Memory reuses the existing resource PageHeader, a persistent Add tree menu, and the centered
-Soul-style empty composition. Saved sources appear as divided rows inside one collection,
-with an accurate count, repository/directory, branch and a direct GitHub link. No runtime-ready
-status is inferred from a saved connection. English and Chinese retain the existing navigation;
-Chinese source-management terms are consistent across the page and dialogs.
+Memory reuses the existing resource PageHeader without a primary action and keeps the centered
+Soul-style empty composition. Saved Context Trees appear as divided rows inside one collection,
+with repository/directory, branch and a direct GitHub link. A trailing secondary action exposes
+additional connections without framing the page as an unbounded library. No runtime-ready status
+is inferred from a saved connection. English consistently uses Context Tree and Chinese consistently
+uses 知识树 across the page and dialogs.
 
-Disconnect confirms the exact source and preservation impact, initially focuses Cancel, blocks
+Disconnect confirms the exact Context Tree and preservation impact, initially focuses Cancel, blocks
 dismissal/duplicate submissions while pending, retains failures in the confirmation and restores
-focus to a surviving neighbour or Add tree. Confirmed first connections also return focus to
-the persistent header action and retain visible success feedback.
+focus to a surviving neighbour or the empty-state shortcut. Confirmed first connections return focus
+to the trailing collection action and retain visible success feedback.
 
-Uncertain creation keeps the exact attempted source, blocks unchanged creation across reopening
-and case-only edits, and offers Open repository / Connect existing with the submitted source
-prefilled. Those recovery actions do not automatically send another request. Longer repository
-recovery guidance is secondary disclosure. Directory errors are associated with the field; a
+Uncertain creation keeps every attempted repository by case-insensitive identity, blocks unchanged
+creation across other attempts, reopening and case-only edits, and offers Open repository / Connect
+existing with the matching repository prefilled and focused. A successful connection clears only that
+repository's uncertainty. Those recovery actions do not automatically send another request. Longer
+repository recovery guidance is secondary disclosure. Directory errors are associated with the field; a
 folder-URL example explains the repository-root/directory split without guessing branch names.
 
 Pause and offline restrictions are explained together above the collection. Paused/offline disconnect remains available;
@@ -25,14 +27,15 @@ repair links open a new tab so a draft remains in its original tab. Server revis
 operation scope guards and preservation of repository/cache/unpublished work remain intact.
 
 Initial read failures retain the Memory heading and offer explicit transient retry. A transient
-refresh failure keeps the form/draft and last selection, visibly marks the data unconfirmed and
-disables writes. Terminal authorization/resource failures hide stale settings.
+refresh failure appears below the page title, keeps the form/draft and last selection, visibly marks
+the data unconfirmed and disables writes. Terminal authorization/resource failures hide stale settings.
 
 ## Local verification
 
 - Component behavior: `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
-  — 26 passed. Covers existing operations and limits plus confirmation, pending/refused disconnect,
-  first/last/neighbour focus, uncertain-result recovery, restriction combinations and unconfirmed writes.
+  — 27 passed. Covers existing operations and limits plus confirmation, pending/refused disconnect,
+  first/last/neighbour focus, multiple uncertain-result identities and targeted recovery, restriction combinations
+  and unconfirmed writes.
 - Page/query composition: `pnpm --filter @opentag/web test src/__tests__/context-tree-page.test.tsx`
   — 4 passed, including initial retry, draft retention/recovery and terminal refusal.
 - `pnpm --filter @opentag/web typecheck` and `pnpm --filter @opentag/web build` passed.

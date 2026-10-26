@@ -32,7 +32,7 @@ describe("OpenTag Web App Shell", () => {
     expect(screen.queryByRole("heading", { name: "No Context Trees yet" })).toBeNull();
     read.mockRestore();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByRole("button", { name: "Add tree" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Connect Context Tree" })).toBeTruthy();
   });
 
   it("preserves the open draft through a transient refresh failure and reenables writes after recovery", async () => {
@@ -54,7 +54,11 @@ describe("OpenTag Web App Shell", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(true),
     );
-    expect(screen.getByText("Transient refresh failure")).toBeTruthy();
+    const heading = document.querySelector<HTMLElement>('[data-ui="page-header"] h1');
+    const notice = screen.getByText("Transient refresh failure");
+    expect(heading).toBeTruthy();
+    if (!heading) throw new Error("Memory heading was not rendered");
+    expect(heading.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     read.mockRestore();
     await act(async () => {
       await client.refetchQueries({ queryKey: queryKeys.agents.config(agentId) });

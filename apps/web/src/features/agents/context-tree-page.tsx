@@ -49,16 +49,14 @@ function ContextTreeConfig({
   const state = toResourceState({ ...query, error, isError: error !== null }, (config) => config);
   if (state.kind === "ready")
     return (
-      <div className="grid gap-4">
-        {error ? <ResourceRefreshNotice error={error} onRetry={() => void query.refetch()} /> : null}
-        <ContextTreeSettings
-          config={state.value}
-          computerKind={computerKind}
-          online={online}
-          unconfirmed={error !== null || query.fetchStatus === "paused"}
-          onChanged={() => void syncAgentQueries(queryClient, agentId)}
-        />
-      </div>
+      <ContextTreeSettings
+        config={state.value}
+        computerKind={computerKind}
+        online={online}
+        unconfirmed={error !== null || query.fetchStatus === "paused"}
+        refreshNotice={error ? <ResourceRefreshNotice error={error} onRetry={() => void query.refetch()} /> : undefined}
+        onChanged={() => void syncAgentQueries(queryClient, agentId)}
+      />
     );
   return (
     <div className="grid gap-6">
