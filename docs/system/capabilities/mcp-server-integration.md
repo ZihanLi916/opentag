@@ -143,6 +143,13 @@ The MCP-registered codes `-32020`, `-32021`, and `-32022` are the modern signals
 `-32601` is deliberately *not* one: an older Server also answers `-32601` for a method it does not
 know, so treating it as a modern signal would retry forever instead of falling back once.
 
+The handshake's `notifications/initialized` speaks the revision that `initialize` negotiated,
+exactly as the request after it does. `2025-06-18` and `2025-11-25` expect `MCP-Protocol-Version` on
+every request after the handshake, so the notification carries the negotiated value. `2025-03-26`
+predates that header, so its notification omits it. Omission is not a neutral default: the
+specification reads a missing header as `2025-03-26`, so a strict `2025-06-18` or `2025-11-25`
+Server refuses a notification that a permissive Server accepted.
+
 The same `-32601` decides the era **at any status**, not only on `400`, `404`, or `405`. Zoom's MCP
 Server rejects `server/discover` with `-32601` at HTTP `200` while listing the method as valid; a
 status-only gate read that as a modern peer and failed the probe with `MCP_UPSTREAM_ERROR` before

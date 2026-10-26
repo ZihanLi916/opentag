@@ -141,6 +141,14 @@ export class McpTransport {
   readonly #clientInfo: { name: string; version: string };
   readonly #fetcher: McpOutboundFetcher;
   readonly #protocolVersion: string;
+  /**
+   * The legacy revision this transport's `initialize` negotiated, if any.
+   *
+   * Resolved when the handshake returns, which is before any notification can be sent, so
+   * `notifyLegacy` speaks the same revision as the request that follows it without either caller
+   * having to resolve it early and pass it.
+   */
+  #negotiatedLegacyVersion: string | undefined;
 
   constructor(options: McpTransportOptions) {
     this.#clientInfo = options.clientInfo ?? { name: "opentag", version: "1" };
@@ -276,6 +284,14 @@ export class McpTransport {
     });
     const result = await this.#interpret(accountId, url, "initialize", id, response);
     const sessionId = response.headers.get("mcp-session-id") ?? undefined;
+    /*
+     * Only a version from the legacy list may be spoken on the legacy path: the supported set
+     * includes the modern revision, and stamping it on a handshake-based session is the confusion
+     * `#probeLegacy` and `#callLegacy` guard against.
+     */
+    const named = isRecord(result) ? result.protocolVersion : undefined;
+    this.#negotiatedLegacyVersion =
+      typeof named === "string" && MCP_LEGACY_PROTOCOL_VERSIONS.includes(named as never) ? named : undefined;
     return { ...(sessionId ? { sessionId } : {}), result };
   }
 
@@ -301,6 +317,7 @@ export class McpTransport {
     method: string,
     authHeaders: Record<string, string>,
     sessionId?: string,
+    options: McpCallOptions = {},
   ): Promise<void> {
     const response = await this.#fetcher.fetchOutbound(accountId, url, {
       method: "POST",
@@ -308,9 +325,14 @@ export class McpTransport {
         ...authHeaders,
         accept: MCP_ACCEPT_HEADER,
         "content-type": "application/json",
+        /* The notification speaks the revision the handshake negotiated, resolved by `initialize`:
+         * `callLegacy` and `legacyVersionHeaders` hold the why, including the `2025-03-26` omission. */
+        ...legacyVersionHeaders(options.negotiatedVersion ?? this.#negotiatedLegacyVersion),
         ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+        ...(options.headers ?? {}),
       },
       body: JSON.stringify({ jsonrpc: "2.0", method }),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
     if (response.status < 200 || response.status >= 300) throw upstreamFailure(response.status);
   }
