@@ -48,6 +48,32 @@ the shared header action, and Soul's centered empty state and stable feedback.
 
 ## Visual evidence
 
+### Core screens after the change
+
+The overview and task details below use the production App fixture with synthetic data.
+They show the implemented branch, not a deployed acceptance run. The contact sheet preserves
+the native screenshot scale; use the individual images for focused review.
+
+![Core Schedule screens: desktop overview and task details, Chinese mobile overview and task details](schedule-core-pages.png)
+
+#### Desktop overview — English, 1440px
+
+![Desktop Agent Overview with compact Schedule rows](schedules-after-en-1440-normal.png)
+
+#### Task details — English, 1440px
+
+![Focused Schedule task dialog with original time rule and handoff semantics](schedules-detail-en-1440.png)
+
+#### Mobile overview — Chinese, 390px
+
+![Chinese mobile Agent Overview and Schedule list](schedules-after-zh-390-normal.png)
+
+#### Mobile task details — Chinese, 320px
+
+![Chinese narrow-screen Schedule task dialog](schedules-detail-zh-320.png)
+
+### Additional states and baseline
+
 - `schedules-before-1440.png`: original isolated component baseline.
 - `schedules-after-{en,zh}-{390,1440}-normal.png`: final production shell and Schedule composition.
 - `schedules-detail-en-1440.png`, `schedules-detail-zh-320.png`: focused detail dialog.
