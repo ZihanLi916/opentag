@@ -79,20 +79,48 @@ function renderSkills(cliCommand: string): readonly string[] {
 }
 
 /**
- * The Agent may tune its own configuration through the Session proof. Instructions, model, and
- * reasoning effort feed the effective snapshot hash, so a change applies from the next Turn and that
+ * The Agent may tune its own instructions, model, and reasoning effort through the Session proof.
+ * Those fields feed the effective snapshot hash, so a change applies from the next Turn and that
  * Turn starts a new provider conversation instead of resuming the old one. The Agent is told so it
  * does not change them casually mid-task.
  *
- * The MCP sentence names the self-service path as well as the mount-only one, because the two are
- * different commands and an Agent that learned only `agent self mcp attach` would keep asking a
- * human to register a connector it can register itself.
+ * MCP configuration is a separate section (`renderMcpInChat`). It used to be one sentence inside
+ * this paragraph, which the model skipped when the user named a product or asked to connect a
+ * service without saying "MCP".
  */
 function renderSelfConfiguration(cliCommand: string): readonly string[] {
   return [
     "## Self-configuration",
     "",
-    `Inspect your own configuration with \`${cliCommand} agent self show\`. When a user asks you to change how you work, you may update your own instructions, model, or reasoning effort with \`${cliCommand} agent self update\`, and mount or enable Account MCP Servers with \`${cliCommand} agent self mcp\`. When a user names a connector you do not mount yet, search for it with \`${cliCommand} self mcp search <query>\`, add it with \`${cliCommand} self mcp add <name> <url> [oauth|bearer]\`, and for an OAuth Server give the user the URL from \`${cliCommand} self mcp generate_oauth_url <server>\` and then check \`${cliCommand} self mcp check_oauth_status <server>\`: the consent screen is theirs to click, everything else is yours. Instruction, model, and reasoning-effort changes apply from your next Turn and start a new provider conversation in every existing Session, so earlier conversation context is not carried over; change them only when asked, not mid-task. An Agent that had no usable MCP Server gets MCP access at its next execution. Replacing instructions overwrites them entirely, so read the current value first and keep what still applies.`,
+    `Inspect your own configuration with \`${cliCommand} agent self show\`. When a user asks you to change how you work, you may update your own instructions, model, or reasoning effort with \`${cliCommand} agent self update\`. Instruction, model, and reasoning-effort changes apply from your next Turn and start a new provider conversation in every existing Session, so earlier conversation context is not carried over; change them only when asked, not mid-task. Replacing instructions overwrites them entirely, so read the current value first and keep what still applies.`,
+    "",
+  ];
+}
+
+/**
+ * How the Agent configures MCP inside this Session, on Local and Cloud.
+ *
+ * The section is always present when the Session CLI and the self-configuration opt-in are both
+ * available, including when the `mcp-onboarding` skill is not installed. The skill holds the
+ * command detail. This section is the rule that has to fire from the user message alone.
+ */
+function renderMcpInChat(cliCommand: string): readonly string[] {
+  return [
+    "## MCP",
+    "",
+    `When a user wants to connect, configure, authorize, enable, disable, or remove a product, service, connector, or MCP Server — including "configure X's MCP" and "我想配置 X 的 MCP" — you execute it in this chat. Run \`${cliCommand} self mcp\` before you reply.`,
+    "Do not answer with a setup guide. Do not offer two methods. Do not tell the user to open the web console, log in, open Agent settings, or use the Connectors page, Discover, or Add custom MCP. That page exists, and it is still the wrong reply in this conversation. Do not claim the catalog contains a connector, an action count, or a tool list until a command in this turn returned that fact.",
+    "Branch on the operation before you search or add.",
+    `Existing binding. When they ask to enable, disable, remove, detach, or reauthorize a Server — including "disable Notion" — the first command is \`${cliCommand} self mcp list --json\`. Use the mounted name from that list, even when it is a custom name such as work-notion. Then run enable, disable, or delete on that binding. generate_oauth_url only when they explicitly ask to replace the link. Do not call it while the status is pending. Do not search the catalog and do not run add. add only creates a definition; it does not change an existing one.`,
+    `New connection. When they ask to connect or configure a product, including "configure X's MCP", run \`${cliCommand} self mcp list --json\` and \`${cliCommand} self mcp available --json\` first. A mounted row is not a finished setup: create and attach can return an enabled binding with authorization: null. Reuse the mounted name. Do not add a second definition. If enabled is false, run enable on that name. Then run \`${cliCommand} self mcp check_oauth_status <server>\`.`,
+    `A Bearer key for a Server this Agent already mounts is written with \`${cliCommand} self mcp use <server> --api-key-stdin\`. That command does not create a definition. Do not run add to store a key for an existing name.`,
+    `authorization: null means no OAuth flow has started. Send the URL from \`${cliCommand} self mcp generate_oauth_url <server>\` once. status pending means that link is still live: run check_oauth_status and wait. Do not call generate_oauth_url while the status is pending. That call replaces the flow and invalidates the link. Call it again only when the status is expired, revoked, or error, or when the user says the link was refused or already used. Stop only when the observed state is enabled, the authorization status is active, and probeState is succeeded.`,
+    `If the Account already defines it and this Agent does not mount it, attach that definition and run the same check. Search the catalog only when neither list has it: \`${cliCommand} self mcp search <query> --json\`, using their words as the query. Add a match that is installable and has a url, using its name, url, and auth kind. Then tell them what the command returned.`,
+    "When the search has no installable match, ask them to paste the MCP configuration into this chat. Accept a remote HTTP URL, or JSON or YAML whose servers sit under mcpServers, mcp, servers, or mcp_servers. Read the name, the HTTP endpoint, and oauth or bearer from that paste. Do not invent an endpoint.",
+    "A paste that is only a local process (stdio, command, args, or npx) has no endpoint you can register. Ask for the remote HTTP URL.",
+    `Register a new Server with \`${cliCommand} self mcp add <name> <url> [oauth|bearer]\`. Pass a bearer key with --api-key-stdin. Do not repeat the key in the chat or in a command argument.`,
+    `The user opens the consent screen. An explicit reauthorize replaces the flow on the mounted name. A status that is still pending does not. Follow the mcp-onboarding skill when it is installed.`,
+    "A Server you add or enable is available on the next execution. This surface refuses anonymous (none) servers.",
     "",
   ];
 }
@@ -119,6 +147,7 @@ function renderSession(context: ManagedSessionContext): readonly string[] {
     ...(local && context.sessionCliAvailable && context.selfConfigurationEnabled
       ? renderSelfConfiguration(context.cliCommand)
       : []),
+    ...(context.sessionCliAvailable && context.selfConfigurationEnabled ? renderMcpInChat(context.cliCommand) : []),
     "## Session",
     "",
     `Current Session: ${context.sessionId}`,
