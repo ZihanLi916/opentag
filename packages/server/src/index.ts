@@ -1241,10 +1241,13 @@ export async function startServer(): Promise<void> {
       runtimeAgent: {
         service: new AgentSelfService({
           agents: agentService,
+          authorization: mcpAuthorization,
+          flows: mcpFlows,
           logger: serviceLogger("agent-self"),
           mcp: mcpServers,
           owners: new DatabaseAgentOwnerResolver(database),
           proofs: sessionCliProofService,
+          publicOrigin: config.publicUrl,
         }),
       },
       runtimeAgentSlackProvision: {

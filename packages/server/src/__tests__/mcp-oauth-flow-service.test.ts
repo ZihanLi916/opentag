@@ -4,6 +4,7 @@ import {
   CANVA_DEVELOPER_PORTAL_MCP_URL,
   GOOGLE_WORKSPACE_MCP_AUTHORIZATION_SERVER,
   type McpStaticOAuthBrand,
+  resolveSignInDestination,
 } from "@opentag/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2084,5 +2085,223 @@ describe("cancelling reauthorization", () => {
       flows.callback({ code: "late-code", state: stateOf(replacement.authorizationUrl) }, FLOW_SECRET),
     ).rejects.toMatchObject({ code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID });
     expect((await readAuthorization(ids))?.ciphertext).toBe(before?.ciphertext);
+  });
+
+  describe("browser handoff", () => {
+    /*
+     * `startWithHandoff` is the Agent self-service path (`source: "agent-self"`), so the Agent behind
+     * it must have the owner's opt-in. Seeding it here rather than in the shared `seed()` keeps the
+     * Account-surface tests on the default: an Agent with self-configuration off is still authorized
+     * by a human, and only the self-service entry point may refuse.
+     */
+    async function handoffSeed() {
+      const ids = await seed();
+      await unit.database.update(agents).set({ selfConfigurationEnabled: true }).where(eq(agents.id, ids.agentId));
+      return ids;
+    }
+
+    it("starts with handoff and redeems token successfully", async () => {
+      const ids = await handoffSeed();
+      const { flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      expect(started.authorizationUrl).toContain("/api/v1/mcp-servers/oauth/handoff?token=");
+      const token = new URL(started.authorizationUrl).searchParams.get("token");
+      expect(token).not.toBeNull();
+      const redeemed = await flows.redeemHandoffToken(token ?? "", ids.accountId);
+      expect(redeemed.targetUrl).toContain("https://auth.example.com/authorize");
+      expect(redeemed.flowSecret).toBeDefined();
+    });
+
+    it("allows handoff redemption when reauthorizing an existing active credential", async () => {
+      const ids = await handoffSeed();
+      const { flows } = build({
+        ...discoverableAs(),
+        [TOKEN_URL]: doc({ access_token: "active-token", expires_in: 3600 }),
+      });
+      const initial = await flows.start(ids.accountId, ids.agentId, ids.mcpServerId, [], FLOW_SECRET);
+      await flows.callback({ code: "initial-code", state: stateOf(initial.authorizationUrl) }, FLOW_SECRET);
+      const auth = await readAuthorization(ids);
+      expect(auth?.status).toBe("active");
+
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      const token = new URL(started.authorizationUrl).searchParams.get("token");
+      expect(token).not.toBeNull();
+
+      const redeemed = await flows.redeemHandoffToken(token ?? "", ids.accountId);
+      expect(redeemed.targetUrl).toContain("https://auth.example.com/authorize");
+      expect(redeemed.flowSecret).toBeDefined();
+    });
+
+    it("rejects expired handoff token", async () => {
+      const { cipher, flows } = build(discoverableAs());
+      const expiredToken = cipher.encryptHandoff({
+        flowSecret: FLOW_SECRET,
+        targetUrl: "https://example.com",
+        stateHash: "hash",
+        expiresAt: Date.now() - 10000,
+      });
+      await expect(flows.redeemHandoffToken(expiredToken, randomUUID())).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID,
+      });
+    });
+
+    it("rejects handoff token when no flow is bound to its state", async () => {
+      const { cipher, flows } = build(discoverableAs());
+      const token = cipher.encryptHandoff({
+        flowSecret: FLOW_SECRET,
+        targetUrl: "https://example.com",
+        stateHash: "nonexistent-state-hash",
+        expiresAt: Date.now() + 60000,
+      });
+      // The Account cannot matter here: the lookups that could tell it apart never run.
+      await expect(flows.redeemHandoffToken(token, randomUUID())).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID,
+      });
+    });
+
+    it("survives the sign-in round trip unresolved and redeems only for its owner", async () => {
+      /*
+       * The whole round trip an unauthenticated human takes: the Agent hands out a link, the browser is
+       * bounced through `/login?next=…`, and the destination has to come back intact and still
+       * redeemable. Two things used to break here — a destination bound tighter than the URL this
+       * deployment mints, and a redemption that treated being shown to a browser as being used.
+       */
+      const ids = await handoffSeed();
+      const { cipher, flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+
+      const url = new URL(started.authorizationUrl);
+      const destination = `${url.pathname}${url.search}`;
+      // The sign-in allowlist carries the real generated URL, token and all.
+      expect(resolveSignInDestination(destination)).toBe(destination);
+
+      // Passing through sign-in reads the destination; it must not consume the flow.
+      // This fixture's own URL already runs past the bound that used to refuse a real one.
+      expect(destination.length).toBeGreaterThan(1024);
+
+      // Passing through sign-in reads the destination; it must not consume the flow.
+      const token = url.searchParams.get("token") ?? "";
+      const before = await readAuthorization(ids);
+      expect(before?.state).not.toBeNull();
+      expect(before?.loginSessionHash).toBe(hashSecret(cipher.decryptHandoff(token).flowSecret));
+      const redeemed = await flows.redeemHandoffToken(token, ids.accountId);
+      expect(redeemed.targetUrl).toContain("https://auth.example.com/authorize");
+      // Only now is the issued binding gone, replaced by the fresh secret the cookie will carry.
+      const after = await readAuthorization(ids);
+      expect(after?.state).not.toBeNull();
+      expect(after?.loginSessionHash).toBe(hashSecret(redeemed.flowSecret));
+      expect(after?.loginSessionHash).not.toBe(before?.loginSessionHash);
+    });
+
+    it("rejects a handoff token whose flow state has already lapsed", async () => {
+      const ids = await handoffSeed();
+      const { flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      const token = new URL(started.authorizationUrl).searchParams.get("token") ?? "";
+      await unit.database
+        .update(mcpServerAuthorizations)
+        .set({ stateExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(mcpServerAuthorizations.agentId, ids.agentId));
+
+      await expect(flows.redeemHandoffToken(token, ids.accountId)).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID,
+      });
+    });
+
+    it("rejects a handoff token that does not match the flow's browser binding", async () => {
+      const ids = await handoffSeed();
+      const { flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      const token = new URL(started.authorizationUrl).searchParams.get("token") ?? "";
+
+      /*
+       * The row's own CHECK constraint refuses a null binding while a state is live, so the only
+       * reachable mismatch is a different browser's secret.
+       */
+      await unit.database
+        .update(mcpServerAuthorizations)
+        .set({ loginSessionHash: hashSecret("another-browser") })
+        .where(eq(mcpServerAuthorizations.agentId, ids.agentId));
+      await expect(flows.redeemHandoffToken(token, ids.accountId)).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID,
+      });
+    });
+
+    it("redeems a handoff token exactly once", async () => {
+      const ids = await handoffSeed();
+      const { flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      const token = new URL(started.authorizationUrl).searchParams.get("token") ?? "";
+
+      const first = await flows.redeemHandoffToken(token, ids.accountId);
+      /*
+       * The secret the browser is given is not the one the token carried, and the callback accepts
+       * exactly the new one — so a replayed link cannot re-bind the flow to another browser.
+       */
+      expect(first.flowSecret).not.toBe(FLOW_SECRET);
+      expect((await readAuthorization(ids))?.loginSessionHash).toBe(hashSecret(first.flowSecret));
+      await expect(flows.redeemHandoffToken(token, ids.accountId)).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.OAUTH_FLOW_INVALID,
+      });
+    });
+
+    it("refuses a handoff token belonging to another Account, as a missing Server", async () => {
+      const ids = await handoffSeed();
+      const stranger = await handoffSeed();
+      const { flows } = build(discoverableAs());
+      const started = await flows.startWithHandoff(
+        ids.accountId,
+        ids.agentId,
+        ids.mcpServerId,
+        [],
+        "https://opentag.example",
+      );
+      const token = new URL(started.authorizationUrl).searchParams.get("token") ?? "";
+
+      // 404, not 403: a stranger must not learn from the answer that the flow is real.
+      await expect(flows.redeemHandoffToken(token, stranger.accountId)).rejects.toMatchObject({
+        code: MCP_ERROR_CODES.SERVER_NOT_FOUND,
+        statusCode: 404,
+      });
+      // The refusal does not consume the token for its real owner.
+      const redeemed = await flows.redeemHandoffToken(token, ids.accountId);
+      expect(redeemed.targetUrl).toContain("https://auth.example.com/authorize");
+    });
   });
 });
