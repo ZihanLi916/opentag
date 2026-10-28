@@ -20,16 +20,19 @@ const authentication: MCPAuthenticationView = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("single-Agent OAuth list with an authentication view", () => {
-  it.each(["ready", "failed", "pending", "empty"] as const)(
+  it.each([
+    ["ready", {}, null, false],
+    ["failed", { probeState: "failed", probeError: "MCP_UPSTREAM_UNAVAILABLE: timeout" }, "Request timed out", true],
+    ["pending", { probeState: "pending", toolsCount: null }, "Checking connection…", false],
+    ["empty", { toolsCount: 0 }, "No tools available", false],
+  ] as const)(
     "preserves the ordinary %s row after the authentication view loads",
-    async (state) => {
+    async (state, patch, label, retry) => {
       const mounted = entry({
         authorization: {
           ...authorization(),
           kind: "oauth",
-          probeState: state === "failed" ? "failed" : state === "pending" ? "pending" : "succeeded",
-          probeError: state === "failed" ? "MCP_UPSTREAM_UNAVAILABLE: timeout" : null,
-          toolsCount: state === "empty" ? 0 : state === "pending" ? null : 3,
+          ...patch,
         },
         snapshot: state === "pending" ? null : entry().snapshot,
       });
@@ -42,12 +45,9 @@ describe("single-Agent OAuth list with an authentication view", () => {
       fireEvent.click(within(details).getByRole("button", { name: "Close linear" }));
       const row = screen.getByRole("button", { name: "linear" }).closest("li") as HTMLElement;
       expect(within(row).queryByText("Connected")).toBeNull();
-      if (state === "failed") {
-        expect(within(row).getByText("Request timed out")).toBeTruthy();
-        expect(within(row).getByRole("button", { name: "Retry: linear" })).toBeTruthy();
-      } else if (state === "pending") expect(within(row).getByText("Checking connection…")).toBeTruthy();
-      else if (state === "empty") expect(within(row).getByText("No tools available")).toBeTruthy();
-      else expect(within(row).queryByRole("button", { name: /Retry|Authorize/ })).toBeNull();
+      if (label) expect(within(row).getByText(label)).toBeTruthy();
+      expect(Boolean(within(row).queryByRole("button", { name: "Retry: linear" }))).toBe(retry);
+      expect(within(row).queryByRole("button", { name: /Authorize/ })).toBeNull();
     },
     20_000,
   );
