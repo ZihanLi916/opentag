@@ -66,12 +66,17 @@ source counter as current behavior.
 ## Verification
 
 - `pnpm --filter @opentag/web test src/features/agents/agent-settings/context-tree-settings.test.tsx`
-  — 30 tests passed, including multiple unresolved identities, matching recovery, config-revision
+  — 31 tests passed, including multiple unresolved identities, matching recovery, config-revision
   uncertainty, operation limits, and focus restoration.
 - `pnpm --filter @opentag/web build` passed before capture. Existing browser-externalization and
   chunk-size warnings remain.
 - Each capture was inspected at its original viewport. The connected and empty states contain the
   expected localized labels, and the 320px dialog keeps all fields, guidance, and actions in view.
+- The four English 320px connected states were rechecked on 2026-10-28 after allowing the trailing
+  collection action to shrink and wrap. Connected, active, offline and offline-active each measured
+  `320/320` for both document and main client/scroll widths; the collection measured `286/286`.
+  The **Connect another Context Tree** accessible name, two-item menu and Escape focus return remain
+  unchanged. No tracked English 320px screenshot existed to refresh.
 
 This is focused local visual evidence, not a replacement for full CI, authenticated deployed
 acceptance, real GitHub authorization/publication, or exhaustive accessibility testing.
@@ -85,7 +90,8 @@ The original published `94dda10e` source, limit/focus fixes and new `memory-fina
 are preserved. Independent en/zh four-width acceptance against the same rendered layout adds:
 
 - `single-tree-matrix.json`: 56 states and 8 connect-dialog widths, no page/main overflow. States cover
-  empty, connected, active, offline, combined restrictions, Cloud and 32 long-name trees.
+  empty, connected, active, offline, combined restrictions, Cloud and 32 long-name trees. The four
+  English 320px connected rows reflect the final narrow-action rerun described above.
 - `single-tree-flows.json`: 8 A→B→A lock/recovery flows, exact prefill/input focus, no automatic write,
   keyboard trailing action, expanded-help fit, first-connect and last-disconnect focus.
 - `single-tree-axe.json`: 4 scoped WCAG A/AA/2.1 AA scans without automatic violations; not a complete

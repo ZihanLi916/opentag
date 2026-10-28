@@ -516,7 +516,7 @@ function ContextTreeCollection({
       {selected.length ? (
         <section
           aria-label={m.agent_settings_context_tree_connected_heading()}
-          className="ui-surface divide-y divide-kumo-line bg-kumo-base"
+          className="min-w-0 ui-surface divide-y divide-kumo-line bg-kumo-base"
         >
           {selected.map((entry, index) => (
             <ContextTreeCard
@@ -532,11 +532,18 @@ function ContextTreeCollection({
             <div className="p-3">
               <DropdownMenu>
                 <DropdownMenu.Trigger
-                  render={<Button ref={addButton} variant="ghost" disabled={pending || pauseRequired || unconfirmed} />}
+                  render={
+                    <Button
+                      ref={addButton}
+                      className="max-w-full min-w-0 shrink whitespace-normal text-left"
+                      variant="ghost"
+                      disabled={pending || pauseRequired || unconfirmed}
+                    />
+                  }
                 >
-                  <Icon name="plus" />
-                  {m.agent_settings_context_tree_connect_another()}
-                  <Icon name="chevron-down" />
+                  <Icon name="plus" className="shrink-0" />
+                  <span className="min-w-0 wrap-anywhere">{m.agent_settings_context_tree_connect_another()}</span>
+                  <Icon name="chevron-down" className="shrink-0" />
                 </DropdownMenu.Trigger>
                 <DropdownMenu.Content align="start">
                   <DropdownMenu.Item onClick={() => openForm("connect")}>
