@@ -27,17 +27,16 @@ type CardProps = {
 
 export function McpServerCard(props: CardProps) {
   const { entry, highlighted } = props;
-  const connecting =
-    props.authentication && entry.authorization?.kind === "oauth"
-      ? false
-      : Boolean(
-          props.connecting ||
-            props.oauthSession?.phase ||
-            (entry.enabled &&
-              entry.authorization?.status === "active" &&
-              entry.authorization.probeState === "pending" &&
-              !hasMcpToolSnapshot(entry)),
-        );
+  const connecting = sharedAuthentication(entry, props.authentication)
+    ? false
+    : Boolean(
+        props.connecting ||
+          props.oauthSession?.phase ||
+          (entry.enabled &&
+            entry.authorization?.status === "active" &&
+            entry.authorization.probeState === "pending" &&
+            !hasMcpToolSnapshot(entry)),
+      );
   return (
     <li
       id={`mcp-server-${entry.mcpServerId}`}
@@ -94,7 +93,9 @@ function McpIdentity(props: CardProps) {
 function McpControls(props: CardProps & { checking: boolean }) {
   const { entry, checking: connecting, resuming, onResume, onAction } = props;
   const feedback = rowFeedback({ ...props, connecting });
-  const busy = Boolean(resuming || (!props.authentication && (props.connecting || props.oauthSession?.phase)));
+  const busy = Boolean(
+    resuming || (!sharedAuthentication(entry, props.authentication) && (props.connecting || props.oauthSession?.phase)),
+  );
   const actionLabel =
     feedback.action === "retry"
       ? m.mcp_retry()
@@ -157,7 +158,8 @@ function rowFeedback({
   connectionError,
   authentication,
 }: CardProps): McpFeedback {
-  if (authentication && entry.authorization?.kind === "oauth") return authenticationFeedback(authentication);
+  const shared = sharedAuthentication(entry, authentication);
+  if (shared) return authenticationFeedback(shared);
   if (connecting) return pendingConnectionFeedback(oauthSession);
   if (error) return { label: error };
   if (!entry.enabled) return { label: m.mcp_disabled_label(), neutral: true };
@@ -165,6 +167,10 @@ function rowFeedback({
   if (!feedback.label && feedback.action === "authorize")
     return { ...feedback, label: m.mcp_authorization_required(), neutral: true };
   return feedback;
+}
+
+function sharedAuthentication(entry: MCPAgentServer, view: MCPAuthenticationView | undefined) {
+  return entry.authorization?.kind === "oauth" && view && view.agentCount > 1 ? view : undefined;
 }
 
 function pendingConnectionFeedback(oauthSession?: McpOAuthSession): McpFeedback {

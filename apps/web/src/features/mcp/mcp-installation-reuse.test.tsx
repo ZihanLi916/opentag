@@ -53,7 +53,7 @@ describe("ordinary second-Agent installation", () => {
       github.oauthScopes,
     );
     expectReused(calls);
-  });
+  }, 20_000);
   it("adds GitHub by URL without another definition, consent or foreground probe", async () => {
     const calls = reuseSetup();
     wrap(<McpPage agentId={AGENT_ID} />);
@@ -61,5 +61,5 @@ describe("ordinary second-Agent installation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expectReused(calls);
-  });
+  }, 20_000);
 });

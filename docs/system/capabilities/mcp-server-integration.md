@@ -59,7 +59,11 @@ An existing binding retains its authentication even when it needs renewal. Reaut
 any referring Agent updates that same authentication for every member. The UI shows one shared
 authentication state, error, expiry, progress and authentication action; enable switches and tool
 probes remain Agent-local. A failed tool probe alone does not mark authentication invalid. New
-connections show Connected immediately after reuse; probing runs in the background.
+shared connections show Connected immediately after reuse; probing runs in the background.
+The list uses this common authentication status only when more than one Agent shares it. A
+single-Agent OAuth row retains the ordinary quiet success state, local probe progress, failures,
+Retry and empty-tool hint, with its own OAuth busy guards. Settings show authentication and local
+tool feedback separately, including a failed probe's Retry for a connected authentication.
 Every settled browser OAuth attempt refreshes authentication and mount reads, including denial,
 callback failure and cancellation, so a completed flow does not leave a cached authorizing state.
 

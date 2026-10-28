@@ -1165,6 +1165,7 @@ export class AgentService {
 
   async deleteById(callerUserId: string, agentId: string): Promise<void> {
     const result = await this.#database.transaction(async (transaction) => {
+      await lockMcpAccounts(transaction, [callerUserId]);
       const scope = await this.#lockAgentScopeForMutation(transaction, callerUserId, agentId);
       this.#requireManagePermission(scope);
       if (scope.agent.status !== "suspended") {

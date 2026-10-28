@@ -6,6 +6,7 @@ import { mcpServerAuthorizations, users } from "../../db/schema/index.js";
 import { AgentService } from "../../services/agents/agent-service.js";
 import { MCP_ERROR_CODES } from "../../services/mcp/errors.js";
 import { McpAuthorizationService } from "../../services/mcp/mcp-authorization-service.js";
+import { lockMcpAccounts } from "../../services/mcp/mcp-binding-locks.js";
 import type { McpProbeResult } from "../../services/mcp/mcp-probe.js";
 import { OnboardingResetService } from "../../services/onboarding-reset/index.js";
 import { deferred } from "../support/deferred.js";
@@ -313,14 +314,54 @@ describe("shared MCP authentication on PostgreSQL", () => {
       code: MCP_ERROR_CODES.BINDING_NOT_FOUND,
     });
   });
-  it("hands off a suspended Agent's shared root during deletion", async () => {
+  it("takes Account admission before locking a deleted Agent and handing off its root", async () => {
     const f = await sharedMcpFixture(client.database);
     const [a, b] = f.ids as [string, string];
     await f.connect(b);
-    await new AgentService(client.database, { mcpCredentialCipher: f.cipher }).deleteById(f.accountId, a);
-    expect((await f.row(b))?.id).toBe(f.root.id);
-    expect((await f.auth.buildHeaders(f.accountId, b, f.server.id)).authorization).toBe("Bearer old-access");
-  });
+    const blocker = createDatabaseClient(fixture.databaseUrl, { max: 1 });
+    const remover = createDatabaseClient(fixture.databaseUrl, { max: 1 });
+    const locked = deferred();
+    const release = deferred();
+    const afterAgentLocked = vi.fn(async () => {});
+    const holding = blocker.database.transaction(async (transaction) => {
+      await lockMcpAccounts(transaction, [f.accountId]);
+      locked.resolve();
+      await release.promise;
+    });
+    const pending: Promise<unknown>[] = [holding];
+    try {
+      await locked.promise;
+      const [backend] = await remover.sql<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      if (!backend) throw new Error("Missing deletion backend");
+      const deleting = Promise.allSettled([
+        new AgentService(remover.database, { mcpCredentialCipher: f.cipher, afterAgentLocked }).deleteById(
+          f.accountId,
+          a,
+        ),
+      ]);
+      pending.push(deleting);
+      await vi.waitFor(
+        async () => {
+          const [activity] = await client.sql<{ blocked: boolean; query: string }[]>`
+          select wait_event_type = 'Lock' as blocked, query from pg_stat_activity where pid = ${backend.pid}
+        `;
+          expect(activity?.blocked).toBe(true);
+          expect(activity?.query).toContain('"users"');
+        },
+        { timeout: 5_000 },
+      );
+      expect(afterAgentLocked).not.toHaveBeenCalled();
+      release.resolve();
+      expect(await deleting).toMatchObject([{ status: "fulfilled" }]);
+      expect(afterAgentLocked).toHaveBeenCalledOnce();
+      expect((await f.row(b))?.id).toBe(f.root.id);
+      expect((await f.auth.buildHeaders(f.accountId, b, f.server.id)).authorization).toBe("Bearer old-access");
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
+      await Promise.all([blocker.sql.end(), remover.sql.end()]);
+    }
+  }, 20_000);
   it("clears a complete shared family through onboarding reset", async () => {
     const f = await sharedMcpFixture(client.database);
     await f.connect(f.ids[1] as string);

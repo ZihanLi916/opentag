@@ -195,10 +195,7 @@ async function expectReady(page: Page, id: string) {
     })
     .toBe(true);
   await expect(page.locator('[data-ui="mcp-server-list"]')).toBeVisible();
-  const kind = (await mounts(page, id))[0]?.authorization?.kind;
-  await expect(page.locator('[data-ui="mcp-server-list"]').getByText("Connected", { exact: true })).toHaveCount(
-    kind === "oauth" ? 1 : 0,
-  );
+  await expect(page.locator('[data-ui="mcp-server-list"]').getByText("Connected", { exact: true })).toHaveCount(0);
 }
 
 async function discoverPeer(page: Page, current: Awaited<ReturnType<typeof agent>>, url: string) {
