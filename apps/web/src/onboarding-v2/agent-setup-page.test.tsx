@@ -661,11 +661,7 @@ describe("AgentSetupPage stages", () => {
 
     expect(screen.getByRole("heading", { name: "reviewer is ready." })).toBeTruthy();
     // Provider identity reaches the done screen from the snapshot, not from page state.
-    expect(
-      screen.getByText(
-        "Connection checks passed. Send “Hello” in the Bot’s chat and confirm its reply to verify actual message delivery.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText("Open the Bot’s chat in Slack, send “Hello” and confirm its reply.")).toBeTruthy();
     expect(onReady).toHaveBeenCalledWith(SETUP_AGENT_ID);
     expect(onReady).toHaveBeenCalledTimes(1);
   });
@@ -1143,7 +1139,7 @@ describe("AgentSetupPage transitions", () => {
     expect(oauth).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Connect Slack" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close Connect Slack" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await settle();
     expect(screen.queryByRole("region", { name: "Connect Slack" })).toBeNull();
     expect(document.activeElement).toBe(messagingChoice(/Slack/));
@@ -1364,7 +1360,7 @@ describe("AgentSetupPage messaging choice loading", () => {
     const adapter = await renderMessagingStartChoice();
     fireEvent.click(messagingChoice(/Slack/));
     await settle();
-    expect(screen.getByRole("button", { name: "Close Connect Slack" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Manual setup" })).toHaveProperty("disabled", true);
     expect(adapter.startSlackInstall).not.toHaveBeenCalled();
     gate.resolve({ status: "authorization_required", ticket: "ticket" });
@@ -1390,7 +1386,7 @@ describe("AgentSetupPage messaging choice loading", () => {
     const adapter = await renderMessagingStartChoice();
     fireEvent.click(messagingChoice(/Slack/));
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Close Connect Slack" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await settle();
     expectIdleMessagingChoices();
     expect(adapter.startSlackInstall).not.toHaveBeenCalled();
@@ -2548,3 +2544,45 @@ describe("messaging authorization lifetime", () => {
     expect(document.querySelector('[data-ui="agent-setup-messaging"]')?.getAttribute("data-state")).toBe("authorizing");
   });
 });
+
+it.each(["not-configured", "blocked"] as const)(
+  "does not promise polling after a timed-out focus read in %s messaging",
+  async (kind) => {
+    const memory = createMemorySetupAdapter({
+      agent: setupAgent(),
+      ...(kind === "blocked"
+        ? {
+            messaging: {
+              kind: "bound",
+              provider: "feishu",
+              reachable: true,
+              attention: "reauthorization-required",
+            } as const,
+          }
+        : {}),
+    });
+    const initial = await memory.adapter.readSnapshot(SETUP_AGENT_ID);
+    const snapshot = { ...initial, stage: "needs-messaging" as const };
+    expect(snapshot.messaging.kind).toBe(kind);
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot)
+      .mockImplementation(() => new Promise(() => {}));
+    renderSetup(scriptedAdapter(read));
+    await settle();
+    if (kind === "not-configured") {
+      continueFromPreparation();
+      await settle();
+    }
+    act(() => window.dispatchEvent(new Event("focus")));
+    await settle();
+    await advance(AGENT_SETUP_READ_TIMEOUT_MS + 1);
+    expect(screen.getAllByRole("alert").map((alert) => alert.textContent)).toContain(
+      "The status check timed out. The last known state is shown.",
+    );
+    expect(document.querySelector('[data-ui="agent-setup-messaging"]')?.getAttribute("data-state")).toBe(kind);
+    const calls = read.mock.calls.length;
+    await advance(5 * SETUP_POLL_MS);
+    expect(read).toHaveBeenCalledTimes(calls);
+  },
+);

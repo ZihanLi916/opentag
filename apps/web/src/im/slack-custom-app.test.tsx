@@ -62,7 +62,10 @@ function bound(): SlackConfigurationView {
   };
 }
 
-function fixture(view: SlackConfigurationView = unbound(), options: { manualOnly?: boolean } = {}) {
+function fixture(
+  view: SlackConfigurationView = unbound(),
+  options: { manualOnly?: boolean; presentation?: "dialog" | "inline" } = {},
+) {
   const read = vi.spyOn(browserApi, "slackConfiguration").mockResolvedValue(view);
   const save = vi.spyOn(browserApi, "saveSlackConfiguration").mockResolvedValue({
     agentId,
@@ -425,4 +428,34 @@ it("surfaces a hung configuration read and offers a fresh read without writing c
   expect(screen.getByText("Couldn’t read connection status. Try again.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   expect(test.save).not.toHaveBeenCalled();
+});
+
+it("names the inline editing exit Cancel in both automatic and manual setup and restores focus", async () => {
+  const test = fixture(unbound(), { presentation: "inline" });
+  vi.mocked(browserApi.autoSetupSlack).mockResolvedValue({ status: "authorization_required", ticket: "test-ticket" });
+  await screen.findByRole("button", { name: "Connect Slack" });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Connect Slack" })).not.toHaveProperty("disabled", true),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
+  await screen.findByLabelText("Code");
+  expect(screen.getByRole("button", { name: "Cancel" }).textContent).toBe("Cancel");
+  expect(screen.queryByRole("button", { name: "Close Connect Slack" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Manual setup" }));
+  enterCredentials();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("region", { name: "Connect Slack" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Connect Slack" }));
+  expect(test.save).not.toHaveBeenCalled();
+});
+
+it("keeps a contextual Close name for the non-editing inline state", async () => {
+  fixture(bound(), { presentation: "inline" });
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  const close = screen.getByRole("button", { name: "Close Connect Slack" });
+  expect(close.textContent).toBe("Close");
+  expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  fireEvent.click(close);
+  expect(screen.queryByRole("region", { name: "Connect Slack" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Continue" }));
 });

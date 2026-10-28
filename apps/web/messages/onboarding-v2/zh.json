@@ -68,7 +68,7 @@
   "onboarding_v2_connection_repair_other_bot": "选择尚未绑定到其他 Agent 的机器人，或先处理已有绑定。",
   "onboarding_v2_connection_repair_permissions": "请应用管理员确认所需权限已批准并生效，再重新连接。",
   "onboarding_v2_connection_repair_service": "稍后重试。如果持续失败，请检查运行电脑能否访问消息应用。",
-  "onboarding_v2_connection_status_timeout": "状态检查超时，当前显示上次获取的状态，稍后会自动重试。",
+  "onboarding_v2_connection_status_timeout": "状态检查超时，当前显示上次获取的状态。",
   "onboarding_v2_destination_cloud_check_failed_badge": "无法检查",
   "onboarding_v2_destination_cloud_check_failed_description": "无法确认此部署的云端可用性。请重试，或将 Agent 运行在自己的电脑上。",
   "onboarding_v2_destination_cloud_checking": "检查中…",

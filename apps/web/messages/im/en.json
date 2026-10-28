@@ -133,7 +133,7 @@
   "im_slack_create_recovery": "If creation stalls, check Your Apps first. If the App exists, open OAuth & Permissions → Install to workspace. If {provider} asks you to wait, retry later without creating another copy.",
   "im_slack_credentials_unavailable": "The saved credentials cannot be recovered. Disconnect and reconnect this App; history is retained.",
   "im_slack_current_app": "Current App",
-  "im_slack_delivery_check": "Connection checks passed. Send “Hello” in the Bot’s chat and confirm its reply to verify actual message delivery.",
+  "im_slack_delivery_check": "Open the Bot’s chat in Slack, send “Hello” and confirm its reply.",
   "im_slack_diagnostics": "Diagnostics",
   "im_slack_existing_app_help": "Help",
   "im_slack_existing_app_instructions": "If this App does not have the URL and events below, add them in {provider} without replacing its other settings. Install again if permissions changed, then update the Token.",

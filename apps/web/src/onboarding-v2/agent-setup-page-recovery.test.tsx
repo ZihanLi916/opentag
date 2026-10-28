@@ -206,7 +206,7 @@ describe("AgentSetupPage action failures", () => {
     await settle();
 
     expect(screen.getByRole("alert").textContent).toBe(message);
-    expect(screen.getByRole("button", { name: "Close Connect Slack" })).not.toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Cancel" })).not.toHaveProperty("disabled", true);
   });
 
   it.each([

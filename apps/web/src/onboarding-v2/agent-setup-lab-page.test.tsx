@@ -314,11 +314,7 @@ describe("agent setup lab page", () => {
 
     await chooseOption("Screen state", "Everything ready");
     await chooseOption("Connected messaging app", "Slack");
-    expect(
-      await screen.findByText(
-        "Connection checks passed. Send “Hello” in the Bot’s chat and confirm its reply to verify actual message delivery.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Open the Bot’s chat in Slack, send “Hello” and confirm its reply.")).toBeTruthy();
     expect(screen.getByText("1 changed")).toBeTruthy();
   });
 });

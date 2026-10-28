@@ -339,3 +339,44 @@ Screenshots are **isolated mock fixtures**, with preview controls hidden:
   it was not repeated for this bounded CSS change. CI and ownership approval remain
   required before merge. Axe was not rerun: the reported blockers are verified by
   explicit target-size and contrast measurements.
+
+
+## Accessible names and messaging copy follow-up (2026-10-28)
+
+- The inline Slack editing exit now derives its accessible name from visible
+  Cancel text. Non-editing Close retains its contextual `Close Connect Slack`
+  name. Default dialog controls and connection callbacks are unchanged.
+- English/Chinese timeout copy reports only the timed-out check and last known
+  state; it does not promise polling for blocked or not-configured snapshots.
+  Polling and retry behavior itself is unchanged.
+- Slack delivery guidance now names the chat and send/reply action, without
+  repeating the preceding readiness result. Readiness still does not claim live
+  message delivery.
+- The design guide now states that 32px footer controls are desktop sizing and
+  that narrow screens as well as coarse pointers require at least 44px.
+
+### Verification
+
+- Seven affected Web suites / **202 tests passed** across the initial and corrected
+  runs: Slack custom-app, Slack auto-connect, Agent setup page/recovery, Slack
+  setup entry, setup Lab page, and isolated playground. Four new cases cover
+  editing/non-editing accessible names and hung focus reads in both non-polling
+  messaging states. Existing dialog and pending-operation checks still pass.
+- Initial verification exposed stale-element and alert-selection assumptions in
+  the new tests, which were corrected. One suite hit an import race while shared
+  dependencies were rebuilt concurrently; it passed after the build completed.
+  All affected suites passed on rerun. Type checking also caught an unsupported
+  test-query option; it was removed (string names already match exactly), and
+  those four test files were rerun.
+- Production-component preview build and root `pnpm check` passed. The existing
+  chunk-size and repository lint warnings remain; `git diff --check` passed.
+- Browser: Chinese automatic/manual Cancel and English automatic Cancel expose
+  their visible text with no conflicting aria-label. Cancel restores entry focus.
+  A fixture authorization save exposes visible Close with contextual accessible
+  name; closing and simulated handoff display the refined Slack ready guidance.
+  No browser console errors in this production-preview session.
+- [Updated Slack ready guidance](../web-ui/bot-connection-preview/review-slack-ready-en.png)
+  is a simulated fixture with preview controls hidden, not a live delivery result.
+- Timeout branches were verified with fake timers and scripted adapters in tests,
+  not by forcing a live provider outage. Live authorization/delivery, physical
+  screen readers and speech-control hardware remain unverified.

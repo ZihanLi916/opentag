@@ -86,7 +86,8 @@ with 14px names and 13px descriptions explaining each authorization method.
 State cards share provider identity, concise guidance and an action area. The
 176px Feishu QR sits beside the left-aligned title, instructions and status on
 wider screens and below them on phones. Cards use 16px insets, 12–14px content
-gaps and 32px footer controls. Slack inline forms place cancellation beside their
+gaps and 32px desktop footer controls (at least 44px below 768px or for coarse
+pointers). Slack inline forms place cancellation beside their
 primary action in the bottom bar, with manual setup or Back on the left. Native
 form submission and disabled/busy behavior are preserved. Saved authorization exposes prerequisite-specific guidance and expandable
 application/permission details. Retry and permission update remain the primary
@@ -95,7 +96,9 @@ recovery actions; destructive disconnection retains its confirmation.
 Authorization guidance names the next action in the provider, including Slack's
 message composer and returned challenge code. Inline Slack forms use the same
 shared controls, including keyboard submission, busy guards and accessible input
-descriptions. Slow operations report waiting without inventing a progress percentage
+descriptions. The inline editing exit exposes its visible Cancel label to assistive
+technology; the non-editing Close action retains its contextual name. Slow operations
+report waiting without inventing a progress percentage
 or a failure. A lost response allows an explicit retry of the same operation, never
 automatic replay. Known provider errors retain their specific recovery message.
 
@@ -108,7 +111,8 @@ No outbound-message test endpoint or reply acknowledgement is added by this UI.
 Feishu QR pixels disappear at their supplied expiry; the Server continues to own
 attempt state and permitted recovery actions. Expired attempts offer a new QR when
 the snapshot permits a retry. Messaging observation timeouts keep the last snapshot
-visible with an explicit stale-status notice. Reduced-motion preferences disable
+visible with an explicit stale-status notice that does not promise automatic checks
+for states without polling. Reduced-motion preferences disable
 the waiting pulse, and coarse pointers retain 44px button targets.
 
 Recovery prioritizes recognized provider error codes over generic blocker labels,

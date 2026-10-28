@@ -378,7 +378,7 @@ function SlackConfigurationDialog({
       variant="ghost"
       size="compact"
       onClick={onClose}
-      aria-label={`${m.common_close()} ${title}`}
+      aria-label={editing ? undefined : `${m.common_close()} ${title}`}
     >
       {editing ? m.common_cancel() : m.common_close()}
     </Button>

@@ -68,7 +68,7 @@
   "onboarding_v2_connection_repair_other_bot": "Choose a bot that is not connected to another Agent, or resolve its existing binding first.",
   "onboarding_v2_connection_repair_permissions": "Ask the app administrator to approve the required permissions, then reconnect.",
   "onboarding_v2_connection_repair_service": "Retry shortly. If this persists, check that the running computer can reach the messaging app.",
-  "onboarding_v2_connection_status_timeout": "The status check timed out. The last known state is shown; checking will continue automatically.",
+  "onboarding_v2_connection_status_timeout": "The status check timed out. The last known state is shown.",
   "onboarding_v2_destination_cloud_check_failed_badge": "Could not check",
   "onboarding_v2_destination_cloud_check_failed_description": "Cloud availability could not be checked. Try again, or run the agent on your own computer.",
   "onboarding_v2_destination_cloud_checking": "Checking…",
