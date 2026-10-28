@@ -107,6 +107,10 @@ an active, ready handoff. Saved authorization and identity-only verification rem
 pending states. Ready screens explain that these are connection/readiness checks;
 actual delivery still requires sending a message and confirming the Bot's reply.
 No outbound-message test endpoint or reply acknowledgement is added by this UI.
+Slack configuration reads combine query-lifecycle and deadline cancellation and
+forward it to fetch, so expired reads and reads with no remaining observers abort.
+The last-good view and foreground readiness polling remain available; cancellation
+does not introduce automatic authorization writes.
 
 Feishu QR pixels disappear at their supplied expiry; the Server continues to own
 attempt state and permitted recovery actions. Expired attempts offer a new QR when

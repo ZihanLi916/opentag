@@ -380,3 +380,43 @@ Screenshots are **isolated mock fixtures**, with preview controls hidden:
 - Timeout branches were verified with fake timers and scripted adapters in tests,
   not by forcing a live provider outage. Live authorization/delivery, physical
   screen readers and speech-control hardware remain unverified.
+
+
+## Slack configuration-read cancellation (2026-10-28)
+
+Scope: the configuration GET path reviewed at `69ab6c49`. The query now combines
+React Query's lifecycle signal with the 10-second deadline signal and passes it
+through `SlackSetupApi` (which derives the method type) and `BrowserApi` to fetch.
+The API's trailing signal is optional, preserving existing callers. No provider
+protocol, authorization write, polling interval, last-good-view behavior, layout,
+or dependency changes.
+
+### Regression evidence
+
+The tests mount the production `SlackCustomApp` with the production `BrowserApi`
+and an injected abort-aware fetch. They fail on the preceding implementation
+because neither deadline expiry nor unmount aborts the recorded transport signal.
+After the fix:
+
+- A saved, pending Slack binding opens its readiness panel. Three consecutive
+  polling reads stall. Each 10-second deadline aborts its actual fetch before the
+  next poll; maximum simultaneous pending reads stays at one.
+- The last-good authorization/verification state remains visible alongside the
+  status-read failure. Once the endpoint fixture recovers to verified/ready, the
+  error clears and polling stops. Every recorded request is a configuration GET;
+  no authorization or credential write is performed.
+- Unmount during the initial pending read aborts fetch immediately, before the
+  deadline. No additional request starts after advancing beyond the deadline and
+  another polling interval.
+
+Targeted suites: Slack custom-app **23 tests passed**; nine affected API, CSRF,
+Agent messaging, Slack auto-connect, setup, setup recovery, setup entry, Lab and
+preview suites **244 tests passed** (**10 files / 267 tests** total). Web typecheck
+passed. These transport regressions use fake timers and injected fetch, not a live
+Slack service or a real provider outage. Live authorization and delivery acceptance
+remain outstanding; no production account or credentials were used.
+
+Normal Web and production-component preview builds passed with the existing
+chunk-size warning. No new UI screenshot is needed for this transport-only fix;
+prior visual evidence remains applicable. Full CI and live provider acceptance
+still require maintainer/environment access.

@@ -96,7 +96,10 @@ function SlackCustomAppFlow({
   }, []);
   const configuration = useQuery({
     queryKey: ["slack-configuration", agentId, bindingId],
-    queryFn: () => withDeadline(AGENT_SETUP_READ_TIMEOUT_MS, () => api.slackConfiguration(agentId)),
+    queryFn: ({ signal: querySignal }) =>
+      withDeadline(AGENT_SETUP_READ_TIMEOUT_MS, (deadlineSignal) =>
+        api.slackConfiguration(agentId, AbortSignal.any([querySignal, deadlineSignal])),
+      ),
     // A new binding key must not remove the open post-save verification dialog.
     placeholderData: (previous) => previous,
     retry: false,

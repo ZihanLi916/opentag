@@ -665,8 +665,10 @@ export class BrowserApi {
     });
   }
 
-  slackConfiguration(agentId: string): Promise<SlackConfigurationView> {
-    return this.request(agentSlackConfigurationPath(agentId), SlackConfigurationViewSchema);
+  slackConfiguration(agentId: string, signal?: AbortSignal): Promise<SlackConfigurationView> {
+    return this.request(agentSlackConfigurationPath(agentId), SlackConfigurationViewSchema, {
+      ...(signal ? { signal } : {}),
+    });
   }
 
   saveSlackConfiguration(agentId: string, input: SaveSlackConfigurationRequest): Promise<SlackConfigurationResult> {

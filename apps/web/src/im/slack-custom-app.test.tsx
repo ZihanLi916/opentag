@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, browserApi } from "../api.js";
+import { AGENT_SETUP_READ_TIMEOUT_MS, ApiError, BrowserApi, browserApi } from "../api.js";
 import { SlackCustomApp } from "./slack-custom-app.js";
 
 const agentId = "1a63a21e-f6c7-4474-91ea-4dabf0566a24";
@@ -64,7 +64,7 @@ function bound(): SlackConfigurationView {
 
 function fixture(
   view: SlackConfigurationView = unbound(),
-  options: { manualOnly?: boolean; presentation?: "dialog" | "inline" } = {},
+  options: { manualOnly?: boolean; presentation?: "dialog" | "inline"; api?: BrowserApi } = {},
 ) {
   const read = vi.spyOn(browserApi, "slackConfiguration").mockResolvedValue(view);
   const save = vi.spyOn(browserApi, "saveSlackConfiguration").mockResolvedValue({
@@ -458,4 +458,89 @@ it("keeps a contextual Close name for the non-editing inline state", async () =>
   fireEvent.click(close);
   expect(screen.queryByRole("region", { name: "Connect Slack" })).toBeNull();
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Continue" }));
+});
+
+/** A real API transport that can stall, but releases a request when fetch is aborted. */
+function cancellableConfigurationTransport(initial?: SlackConfigurationView) {
+  const pending = new Set<{ signal: AbortSignal | null | undefined }>();
+  const signals: (AbortSignal | null | undefined)[] = [];
+  let peakPending = 0;
+  let recovered: SlackConfigurationView | undefined;
+  const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+    if (initial && fetchImpl.mock.calls.length === 1) return Response.json(initial);
+    if (recovered) return Response.json(recovered);
+    const signal = init?.signal;
+    signals.push(signal);
+    const request = { signal };
+    pending.add(request);
+    peakPending = Math.max(peakPending, pending.size);
+    return new Promise<Response>((_resolve, reject) => {
+      const abort = () => {
+        pending.delete(request);
+        reject(signal?.reason ?? new DOMException("Request aborted", "AbortError"));
+      };
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  });
+  return {
+    api: new BrowserApi(fetchImpl),
+    fetchImpl,
+    signals,
+    pending,
+    peakPending: () => peakPending,
+    recover: (view: SlackConfigurationView) => {
+      recovered = view;
+    },
+  };
+}
+
+it("aborts expired configuration GETs without overlapping polls, retains the view, and recovers without writes", async () => {
+  const transport = cancellableConfigurationTransport(bound());
+  fixture(bound(), { api: transport.api, presentation: "inline" });
+  const entry = await screen.findByRole("button", { name: "Continue" });
+  vi.useFakeTimers();
+  fireEvent.click(entry);
+  await act(() => vi.advanceTimersByTimeAsync(2_001));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    expect(transport.signals).toHaveLength(attempt + 1);
+    expect(transport.pending.size).toBe(1);
+    await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS));
+    expect(transport.signals[attempt]?.aborted).toBe(true);
+    expect(transport.pending.size).toBe(0);
+    expect(screen.getByText("Authorization saved · verification pending")).toBeTruthy();
+    expect(screen.getByText("Couldn’t read connection status. Try again.")).toBeTruthy();
+    if (attempt < 2) await act(() => vi.advanceTimersByTimeAsync(2_001));
+  }
+  transport.recover({
+    ...bound(),
+    identityClosure: { status: "verified", verifiedAt: "2026-10-12T00:02:00.000Z" },
+    handoff: { bindingState: "active", handoffReady: true },
+  });
+  await act(() => vi.advanceTimersByTimeAsync(2_001));
+  expect(screen.getByText("Slack connected.")).toBeTruthy();
+  expect(screen.queryByText("Couldn’t read connection status. Try again.")).toBeNull();
+  expect(transport.peakPending()).toBe(1);
+  const reads = transport.fetchImpl.mock.calls.length;
+  await act(() => vi.advanceTimersByTimeAsync(6_000));
+  expect(transport.fetchImpl).toHaveBeenCalledTimes(reads);
+  for (const [url, init] of transport.fetchImpl.mock.calls) {
+    expect(String(url)).toBe(`/api/v1/agents/${agentId}/im-binding/slack/configuration`);
+    expect(init?.method ?? "GET").toBe("GET");
+  }
+});
+
+it("aborts an in-flight configuration GET on unmount before its deadline", async () => {
+  vi.useFakeTimers();
+  const transport = cancellableConfigurationTransport();
+  const test = fixture(unbound(), { api: transport.api, presentation: "inline" });
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(transport.signals).toHaveLength(1);
+  expect(transport.pending.size).toBe(1);
+  test.unmount();
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  expect(transport.signals[0]?.aborted).toBe(true);
+  expect(transport.pending.size).toBe(0);
+  await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS + 2_001));
+  expect(transport.fetchImpl).toHaveBeenCalledOnce();
 });
