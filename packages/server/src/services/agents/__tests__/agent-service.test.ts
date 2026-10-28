@@ -774,7 +774,7 @@ describe("AgentService", () => {
     const binding = await createBinding(agent.id);
     const session = await createSession(binding.id, computer.id);
     const assembler = new EffectiveRuntimeSnapshotAssembler(unitDatabase.database);
-    for (const selfConfigurationEnabled of [true, false]) {
+    for (const selfConfigurationEnabled of [false, true]) {
       const previous = await assembler.assembleForSession(session.id);
       agent = await service.updateById(bootstrap.userId, agent.id, {
         expectedRevision: agent.revision,
@@ -794,12 +794,13 @@ describe("AgentService", () => {
   it("retains the runtime revision for unchanged opt-in and profile-only edits", async () => {
     const { bootstrap, computer, service } = await fixture();
     let agent = await createAgent(service, bootstrap.userId, computer.id);
+    expect(agent.selfConfigurationEnabled).toBe(true);
     const runtimeConfig = agent.runtimeConfig;
     for (const input of [
-      { selfConfigurationEnabled: false },
+      { selfConfigurationEnabled: true },
       { displayName: "Renamed" },
       { receiveMode: "mention_only" as const },
-      { selfConfigurationEnabled: false, runtimeConfig: { instructions: runtimeConfig.instructions } },
+      { selfConfigurationEnabled: true, runtimeConfig: { instructions: runtimeConfig.instructions } },
     ]) {
       agent = await service.updateById(bootstrap.userId, agent.id, { expectedRevision: agent.revision, ...input });
       expect(agent.runtimeConfig).toEqual(runtimeConfig);

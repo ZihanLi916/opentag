@@ -498,6 +498,13 @@
       "when": 1793016066995,
       "tag": "0070_unreported_accepted_index",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1793157286147,
+      "tag": "0071_self_configuration_default_enabled",
+      "breakpoints": true
     }
   ]
 }
