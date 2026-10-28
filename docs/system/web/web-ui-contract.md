@@ -145,7 +145,7 @@ openTag Web targets WCAG 2.2 AA for product UI:
 - normal text contrast is at least 4.5:1;
 - large text and meaningful non-text UI contrast are at least 3:1;
 - every interactive control has a visible focus indicator with at least 3:1 contrast against adjacent colors;
-- shared buttons and single-line controls retain at least 44px height below 768px, with icon buttons also at least 44px wide;
+- shared buttons (including `Banner.Action`) and single-line controls retain at least 44px height below 768px, with icon buttons also at least 44px wide;
 - keyboard order follows the visual and task order;
 - Enter and Space activate controls according to their native semantics;
 - Escape closes dismissible overlays, and focus returns to the control that opened them;
@@ -255,6 +255,10 @@ owns this rule for both standalone and grouped switches; feature pages do not ch
 uses the shared slate focus token rather than the checked-state brand color. Kumo continues to own their size, shape,
 motion, and interaction behavior.
 
+Page navigation replaces the content as soon as the route is ready, without fades, outgoing page snapshots, or
+artificial animation delays, including navigation between workspace and Agent pages. The shell preserves
+per-page scroll position and restores keyboard focus to the remembered link or the new page heading.
+
 Motion must communicate a state change or spatial relationship. Prefer transform and opacity, avoid perpetual animation
 outside an active progress state, and provide a reduced-motion result that communicates the same information without
 movement.
@@ -281,7 +285,10 @@ latest handoff result. Rows prioritize the task name, friendly time rule and rel
 Normal runtime receipt does not occupy a separate row. Exceptional or unconfirmed triggers show a concise
 relative-time warning that opens details; they do not claim task failure or completion. Exact timestamps
 and timezones remain available in time titles and details. Relative labels update locally once per minute
-without fetching private details. The list uses summary fields and fetches the private prompt only on open.
+without fetching private details. On a minute tick at or after a loaded enabled occurrence's due time,
+the list revalidates summaries once per schedule and observed occurrence. An unchanged past occurrence
+does not cause repeated reads; a failed refresh retains rows and exposes Retry. The list uses summary
+fields and fetches the private prompt only on open.
 
 The list stays in one card with compact divided rows; pagination remains an explicit Load more action.
 The schedule name opens a focused detail dialog, including when reached through the existing schedule deep link.
@@ -297,7 +304,7 @@ Retry. A failed initial read does not masquerade as an empty list. The empty sta
 created by asking the Agent in its existing chat; the page does not introduce a separate creation form.
 
 Details prioritize the instructions, the same friendly rule with its timezone, next occurrence and a
-provider/conversation description. Long instructions can be expanded. Existing channel/thread identifiers
+provider/conversation description. Instructions offer expansion only when the rendered paragraph is clipped, including after a resize. Existing channel/thread identifiers
 remain available as technical references; the API does not supply a human-readable destination name.
 Recorded trigger diagnostics are collapsed by default and retain exact times, reason codes and explanations.
 Times omit seconds and repeated GMT offsets; expanded content remains in the dialog's scroll container. An accepted handoff

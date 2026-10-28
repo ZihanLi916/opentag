@@ -5,9 +5,10 @@ import type {
   AgentScheduleRule,
 } from "@opentag/shared/browser";
 import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, browserApi } from "../../api.js";
 import { intlLocale } from "../../i18n/locale.js";
+import { messagingProviderLabel } from "../../im/provider-label.js";
 import * as m from "../../paraglide/messages.js";
 import { queryKeys } from "../../query/keys.js";
 import { Banner, Button, Collapsible, Dialog, DropdownMenu, Icon, SkeletonLine, Text } from "../../ui/design-system.js";
@@ -51,6 +52,7 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   });
   const loaded = useMemo(() => list.data?.pages.flatMap((page) => page.items) ?? [], [list.data]);
+  useDueScheduleRefresh(loaded, now, list.isFetching, list.refetch);
   const deepLinkedItem =
     expandedId && detail.data && !loaded.some((item) => item.id === expandedId) ? detail.data : undefined;
   const rows = deepLinkedItem ? [deepLinkedItem, ...loaded] : loaded;
@@ -213,6 +215,33 @@ function AgentSchedulesContent({ agentId, scheduleId }: { agentId: string; sched
   );
 }
 
+/** Revalidate each observed due occurrence once; never poll an unchanged past occurrence. */
+function useDueScheduleRefresh(
+  rows: AgentScheduleListItem[],
+  now: number,
+  fetching: boolean,
+  refetch: () => Promise<unknown>,
+) {
+  const mountedAt = useRef(now);
+  const checked = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (now === mountedAt.current || fetching) return;
+    const due = rows.filter(
+      (item) =>
+        item.enabled &&
+        item.nextTriggerAt &&
+        Date.parse(item.nextTriggerAt) <= now &&
+        checked.current.get(item.id) !== item.nextTriggerAt,
+    );
+    for (const item of due) checked.current.set(item.id, item.nextTriggerAt as string);
+    const visibleIds = new Set(rows.map((item) => item.id));
+    checked.current.forEach((_, id) => {
+      if (!visibleIds.has(id)) checked.current.delete(id);
+    });
+    if (due.length > 0) void refetch();
+  }, [rows, now, fetching, refetch]);
+}
+
 function ScheduleListState({
   pending,
   error,
@@ -304,7 +333,8 @@ function ScheduleRow({
         <div className="flex min-w-0 items-center gap-2">
           <span
             role="img"
-            aria-label={scheduleStatus(item)}
+            aria-hidden={!item.enabled || !item.nextTriggerAt ? true : undefined}
+            aria-label={item.enabled && item.nextTriggerAt ? scheduleStatus(item) : undefined}
             title={scheduleStatus(item)}
             className={`size-1.5 shrink-0 rounded-full ${item.enabled && item.nextTriggerAt ? "bg-kumo-brand" : "bg-kumo-inactive"}`}
           />
@@ -320,15 +350,20 @@ function ScheduleRow({
           </Button>
         </div>
         <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-3.5 text-xs text-kumo-subtle">
-          {!item.enabled || !item.nextTriggerAt ? <span>{scheduleStatus(item)}</span> : null}
+          {!item.enabled || !item.nextTriggerAt ? (
+            <span className="inline-flex items-baseline gap-x-2">
+              {scheduleStatus(item)}
+              <span aria-hidden="true">·</span>
+            </span>
+          ) : null}
           <span>{scheduleRule(item.schedule, item.timezone)}</span>
           {item.nextTriggerAt ? (
-            <>
+            <span className="inline-flex items-baseline gap-x-2 whitespace-nowrap">
               <span aria-hidden="true">·</span>
               <time dateTime={item.nextTriggerAt} title={formatScheduleTime(item.nextTriggerAt, item.timezone)}>
                 {nextScheduleLabel(item.nextTriggerAt, now)}
               </time>
-            </>
+            </span>
           ) : null}
         </p>
         {item.lastDispatch && item.lastDispatch.outcome !== "accepted" ? (
@@ -539,7 +574,7 @@ export function formatScheduleTime(instant: string, timezone: string): string {
 function ScheduleDetail({ schedule, now }: { schedule: AgentSchedule; now: number }) {
   const last = schedule.lastDispatch;
   const target = schedule.target;
-  const provider = target.provider === "feishu" ? "Feishu" : "Slack";
+  const provider = messagingProviderLabel(target.provider);
   const targetLabel =
     target.sessionKind === "thread" && target.threadKey
       ? m.agents_schedules_destination_thread({ provider })
@@ -612,7 +647,7 @@ function ScheduleDetail({ schedule, now }: { schedule: AgentSchedule; now: numbe
 }
 
 function scheduleTargetReference(target: AgentSchedule["target"]): string {
-  const provider = target.provider === "feishu" ? "Feishu" : "Slack";
+  const provider = messagingProviderLabel(target.provider);
   return target.sessionKind === "thread" && target.threadKey
     ? m.agents_schedules_target_thread({ provider, channel: target.channelId, thread: target.threadKey })
     : m.agents_schedules_target_channel({ provider, channel: target.channelId });
@@ -620,18 +655,30 @@ function scheduleTargetReference(target: AgentSchedule["target"]): string {
 
 function ScheduleInstructions({ prompt, id }: { prompt: string; id: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const paragraph = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const element = paragraph.current;
+    if (!element || expanded || !prompt) return;
+    const measure = () => setOverflows(element.scrollHeight > element.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [prompt, expanded]);
   return (
     <section className="grid gap-2">
       <Text as="h3" variant="heading" size="lg" headingSize="body">
         {m.agents_schedules_prompt()}
       </Text>
       <p
+        ref={paragraph}
         id={id}
         className={`whitespace-pre-wrap wrap-anywhere leading-relaxed text-kumo-default ${expanded ? "" : "line-clamp-4"}`}
       >
         {prompt}
       </p>
-      {prompt.length > 60 || prompt.split("\n").length > 3 ? (
+      {overflows || expanded ? (
         <Button
           variant="inline"
           size="compact"

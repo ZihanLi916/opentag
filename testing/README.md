@@ -9,7 +9,9 @@ contents, and machine-specific operational logs outside the repository.
 
 - [Agent Runtime Provider test plan](agent-runtime-test-plan.md)
 - [Cloud Computer acceptance harness](cloud-computer.md)
+- [Managed CLI installation acceptance](managed-cli-entry/README.md)
 - [Slack local live acceptance](slack-live-acceptance.md)
+- [Agent usage and internal Session page benchmark](performance/agent-session/REPORT.md)
 
 ## Verification by feature
 
@@ -19,6 +21,7 @@ contents, and machine-specific operational logs outside the repository.
 - [Agent Skills](verification/agent-skills.md)
 - [Cloud billing](verification/cloud-billing.md)
 - [Cloud Computer](verification/cloud-computer.md)
+- [Cloud model retry ownership](verification/cloud-model-retry.md)
 - [Cloud Context Tree and Session collaboration](verification/cloud-context.md)
 - [Cloud Pi image input](verification/cloud-pi-image-input.md)
 - [Cloud Runner execution](verification/cloud-runner-execution.md)
@@ -26,9 +29,13 @@ contents, and machine-specific operational logs outside the repository.
 - [Cloud workspace persistence](verification/cloud-workspace-persistence.md)
 - [Context Tree integration](verification/context-tree-integration.md)
 - [Custom Slack Apps](verification/custom-slack-apps.md)
+- [Cloud delivery cancellation reads](performance/cancel-deliveries/README.md)
 - [Database disconnect recovery](verification/database-disconnect.md)
+- [Feishu setup observation consistency](verification/feishu-setup-observation.md)
 - [Feishu user MCP authorization](verification/feishu-user-mcp-authorization.md)
 - [GitHub platform integration](verification/github-platform-integration.md)
+- [GitHub MCP connector](verification/github-mcp.md)
+- [Agent GitHub access through MCP](verification/agent-github-mcp-only.md)
 - [GitHub OAuth cutover](verification/github-oauth-cutover.md)
 - [IM delivery claim queries](im-delivery-claim/README.md)
 - [IM Turn budget and recovery](im-turn-budget-recovery/README.md)

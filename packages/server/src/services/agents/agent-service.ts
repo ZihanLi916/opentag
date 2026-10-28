@@ -20,11 +20,10 @@ import {
   type ListAgentsResponse,
   normalizeContextTrees,
   RUNTIME_MAX_DURATION_MS,
-  runtimeUsageTotalTokens,
   type UpdateAgentRequest,
   UpdateAgentRequestSchema,
 } from "@opentag/shared";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { DatabaseClient, DatabaseTransaction } from "../../db/client.js";
 import {
@@ -46,18 +45,29 @@ import { disableImBindingInTransaction } from "../im-bindings/index.js";
 import { lockMcpBindings } from "../mcp/index.js";
 import { resolveAgentRuntimeConfig } from "../runtime-config/index.js";
 import type { CloudModelCatalog } from "../sandboxes/cloud-model-catalog.js";
+import { markEndedDescendantsInactive } from "../sessions/session-closure.js";
 import { AgentTransferError, type AgentTransferInput, type AgentTransferResult } from "./agent-transfer.js";
+import {
+  deliveryUsageTokenCounts,
+  parseAggregateCount,
+  parseAggregateTokenTotal,
+  readAgentUsageDaily,
+  readAgentUsageSummaries,
+} from "./agent-usage.js";
 import { AgentServiceError, resourceNotFound } from "./errors.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type AgentRuntimeConfigRow = typeof agentRuntimeConfigs.$inferSelect;
-type QueryExecutor = Pick<DatabaseClient, "select">;
+type QueryExecutor = Pick<DatabaseClient, "select" | "selectDistinct" | "selectDistinctOn">;
 
 const AGENT_ACTIVITY_REPORT_DELIVERY_SLACK_HOURS = 1;
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1_000;
 export const AGENT_ACTIVITY_RECOVERY_WINDOW_HOURS =
   RUNTIME_MAX_DURATION_MS / MILLISECONDS_PER_HOUR + AGENT_ACTIVITY_REPORT_DELIVERY_SLACK_HOURS;
 export const AGENT_ACTIVITY_READ_LIMIT = 256;
+
+/** Which read path a concurrency test is rendezvousing inside; see `afterReadAuthorization`. */
+export type AgentReadStage = "list" | "usage";
 const AGENT_ACTIVITY_RECOVERY_WINDOW_MS = AGENT_ACTIVITY_RECOVERY_WINDOW_HOURS * MILLISECONDS_PER_HOUR;
 
 interface AgentScope {
@@ -124,16 +134,6 @@ interface AgentActivityEvidence {
   agentId: string;
   reportedAt: Date | null;
   state: string;
-}
-
-interface AgentUsageAggregate {
-  agentId: string;
-  failed: string;
-  inputTokens: string;
-  cachedInputTokens: string;
-  outputTokens: string;
-  tasks: string;
-  invalidTokenCount: boolean | null;
 }
 
 function projectActivityByAgent(rows: readonly AgentActivityEvidence[]): Map<string, AgentListActivity> {
@@ -218,72 +218,6 @@ function toAgentSummary(row: AgentSafeRow): AgentSummary {
     updatedAt: row.updatedAt.toISOString(),
     ...(row.computer && row.computer.ownerAccountId !== row.createdByUserId ? { requiresComputerRebind: true } : {}),
   };
-}
-
-interface UsageTokenCounts {
-  cachedInputTokens: number;
-  inputTokens: number;
-  measured: boolean;
-  outputTokens: number;
-  tokens: number;
-}
-
-function deliveryUsageTokenCounts(
-  provider: AgentRuntimeProvider,
-  inputTokens: string | null,
-  cachedInputTokens: string | null,
-  outputTokens: string | null,
-): UsageTokenCounts {
-  const parse = (value: string | null): number | undefined => {
-    if (value === null) return undefined;
-    const result = Number(value);
-    if (!Number.isSafeInteger(result) || result < 0) {
-      throw new Error("Agent usage contains an invalid token count");
-    }
-    return result;
-  };
-  const usage = {
-    inputTokens: parse(inputTokens),
-    cachedInputTokens: parse(cachedInputTokens),
-    outputTokens: parse(outputTokens),
-  };
-  const normalizedInputTokens = (usage.inputTokens ?? 0) + (provider === "codex" ? 0 : (usage.cachedInputTokens ?? 0));
-  return {
-    inputTokens: normalizedInputTokens,
-    cachedInputTokens: usage.cachedInputTokens ?? 0,
-    outputTokens: usage.outputTokens ?? 0,
-    tokens: runtimeUsageTotalTokens(provider, usage),
-    measured: Object.values(usage).some((value) => value !== undefined),
-  };
-}
-
-function parseAggregateCount(value: string | number | null, field: string): number {
-  const result = Number(value ?? 0);
-  if (!Number.isSafeInteger(result) || result < 0) {
-    throw new Error(`Agent usage ${field} total exceeds the safe integer range`);
-  }
-  return result;
-}
-
-function parseAggregateTokenTotal(value: string | number | null): number {
-  const result = Number(value ?? 0);
-  if (!Number.isSafeInteger(result) || result < 0) {
-    throw new Error("Agent usage token total exceeds the safe integer range");
-  }
-  return result;
-}
-
-function addUsageTokenCounts(
-  target: Pick<AgentUsageDetail, "cachedInputTokens" | "inputTokens" | "outputTokens" | "tokens">,
-  value: UsageTokenCounts,
-): void {
-  target.inputTokens += value.inputTokens;
-  target.cachedInputTokens += value.cachedInputTokens;
-  target.outputTokens += value.outputTokens;
-  target.tokens += value.tokens;
-  if (![target.inputTokens, target.cachedInputTokens, target.outputTokens, target.tokens].every(Number.isSafeInteger)) {
-    throw new Error("Agent usage token total exceeds the safe integer range");
-  }
 }
 
 function assertLocalPermissions(kind: "local" | "cloud" | undefined, provider: string, permissions: unknown) {
@@ -391,6 +325,7 @@ function mergeCloudUsage(
 export class AgentService {
   readonly #afterAgentLocked?: () => Promise<void>;
   readonly #afterMembershipLocked?: () => Promise<void>;
+  readonly #afterReadAuthorization?: (stage: AgentReadStage) => Promise<void> | void;
   readonly #database: DatabaseClient;
   readonly #now: () => Date;
   readonly #onDiagnostic: (code: string) => void;
@@ -413,6 +348,13 @@ export class AgentService {
     options: {
       afterAgentLocked?: () => Promise<void>;
       afterMembershipLocked?: () => Promise<void>;
+      /**
+       * Rendezvous for concurrency tests of the read paths, called inside the read-only snapshot right
+       * after the authorization read and before the details it enables. Nothing in production passes it;
+       * it exists so a test can prove the later reads still observe the authorized snapshot after a
+       * concurrent transfer commits.
+       */
+      afterReadAuthorization?: (stage: AgentReadStage) => Promise<void> | void;
       cloudIdentitiesEnabled?: boolean;
       /**
        * The one Server-owned Router model catalog; present exactly when the deployment's Cloud
@@ -436,6 +378,7 @@ export class AgentService {
   ) {
     this.#afterAgentLocked = options.afterAgentLocked;
     this.#afterMembershipLocked = options.afterMembershipLocked;
+    this.#afterReadAuthorization = options.afterReadAuthorization;
     this.#cloudIdentitiesEnabled = options.cloudIdentitiesEnabled ?? false;
     this.#cloudModelCatalog = options.cloudModelCatalog;
     this.#cloudUsage = options.cloudUsage;
@@ -613,10 +556,11 @@ export class AgentService {
   }
 
   async #readActivityByAgent(
+    executor: QueryExecutor,
     agentIds: readonly string[],
     recoveryStartedAt: Date,
   ): Promise<Map<string, AgentListActivity>> {
-    const activityRows = await this.#database
+    const activityRows = await executor
       .selectDistinctOn([imBindings.agentId], {
         acceptedAt: imMessageDeliveries.acceptedAt,
         agentId: imBindings.agentId,
@@ -638,7 +582,7 @@ export class AgentService {
       )
       .orderBy(imBindings.agentId, desc(imMessageDeliveries.acceptedAt), desc(imMessageDeliveries.id));
 
-    const staleActivityRows = await this.#database
+    const staleActivityRows = await executor
       .selectDistinct({ agentId: imBindings.agentId })
       .from(imMessageDeliveries)
       .innerJoin(sessions, eq(sessions.id, imMessageDeliveries.sessionId))
@@ -662,90 +606,65 @@ export class AgentService {
   }
 
   async listForAccount(callerUserId: string): Promise<ListAgentsResponse> {
-    const creator = alias(users, "agent_creator");
-    const rows = await this.#database
-      .select({
-        id: agents.id,
-        createdByUserId: agents.createdByUserId,
-        creatorDisplayName: creator.displayName,
-        avatarSourceUrl: imBindings.botAvatarUrl,
-        agentComputerId: agents.computerId,
-        computerId: computers.id,
-        computerDisplayName: computers.displayName,
-        computerPlatform: computers.platform,
-        computerOwnerAccountId: computers.ownerAccountId,
-        name: agents.name,
-        displayName: agents.displayName,
-        runtimeProvider: agents.runtimeProvider,
-        receiveMode: agents.receiveMode,
-        status: agents.status,
-        createdAt: agents.createdAt,
-        updatedAt: agents.updatedAt,
-      })
-      .from(agents)
-      .innerJoin(creator, eq(creator.id, agents.createdByUserId))
-      .leftJoin(imBindings, and(eq(imBindings.agentId, agents.id), ne(imBindings.status, "disabled")))
-      .leftJoin(computers, eq(computers.id, agents.computerId))
-      .where(and(eq(agents.createdByUserId, callerUserId), ne(agents.status, "deleted")))
-      .orderBy(asc(agents.createdAt), asc(agents.id));
-    const summaries = rows.flatMap((row) => {
-      if (!row.id) return [];
-      if (!row.creatorDisplayName) throw new Error("Active Agent is missing its creator audit record");
-      return [toAgentSummary({ ...row, computer: toAgentComputer(row) })];
-    });
-    if (summaries.length === 0) return { agents: [] };
-
     const now = this.#now();
     const usageStartedAt = new Date(now.getTime() - AGENT_USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1_000);
     const recoveryStartedAt = new Date(now.getTime() - AGENT_ACTIVITY_RECOVERY_WINDOW_MS);
-    const activityByAgent = await this.#readActivityByAgent(
-      summaries.map((agent) => agent.id),
-      recoveryStartedAt,
+    /*
+     * One read-only snapshot for the whole projection. The Agent query is the authorization — it is the
+     * only statement that names the caller — and the activity and usage reads it enables are keyed by the
+     * Agent IDs it returned. Read under separate Read Committed statements, a transfer committing between
+     * them would let the previous owner keep reading the transferred Agent's activity and usage. Under one
+     * snapshot the list is the state the authorization accepted, and a later call reflects the transfer.
+     * The Cloud ledger read stays outside: it is a different subsystem keyed by Account, not by Agent.
+     */
+    const read = await this.#database.transaction(
+      async (transaction) => {
+        const creator = alias(users, "agent_creator");
+        const rows = await transaction
+          .select({
+            id: agents.id,
+            createdByUserId: agents.createdByUserId,
+            creatorDisplayName: creator.displayName,
+            avatarSourceUrl: imBindings.botAvatarUrl,
+            agentComputerId: agents.computerId,
+            computerId: computers.id,
+            computerDisplayName: computers.displayName,
+            computerPlatform: computers.platform,
+            computerOwnerAccountId: computers.ownerAccountId,
+            name: agents.name,
+            displayName: agents.displayName,
+            runtimeProvider: agents.runtimeProvider,
+            receiveMode: agents.receiveMode,
+            status: agents.status,
+            createdAt: agents.createdAt,
+            updatedAt: agents.updatedAt,
+          })
+          .from(agents)
+          .innerJoin(creator, eq(creator.id, agents.createdByUserId))
+          .leftJoin(imBindings, and(eq(imBindings.agentId, agents.id), ne(imBindings.status, "disabled")))
+          .leftJoin(computers, eq(computers.id, agents.computerId))
+          .where(and(eq(agents.createdByUserId, callerUserId), ne(agents.status, "deleted")))
+          .orderBy(asc(agents.createdAt), asc(agents.id));
+        const summaries = rows.flatMap((row) => {
+          if (!row.id) return [];
+          if (!row.creatorDisplayName) throw new Error("Active Agent is missing its creator audit record");
+          return [toAgentSummary({ ...row, computer: toAgentComputer(row) })];
+        });
+        if (summaries.length === 0) return { summaries, activityByAgent: new Map(), usageRows: [] };
+        await this.#afterReadAuthorization?.("list");
+        const agentIds = summaries.map((agent) => agent.id);
+        const activityByAgent = await this.#readActivityByAgent(transaction, agentIds, recoveryStartedAt);
+        const usageRows = await readAgentUsageSummaries(transaction, {
+          agentIds,
+          startedAt: usageStartedAt,
+          endedAt: now,
+        });
+        return { summaries, activityByAgent, usageRows };
+      },
+      { isolationLevel: "repeatable read", accessMode: "read only" },
     );
-
-    const inputTokensText = sql<
-      string | null
-    >`case when ${imMessageDeliveries.executionOrigin} = 'cloud' then null else ${imMessageDeliveries.turnReport} #>> '{usage,inputTokens}' end`;
-    const cachedInputTokensText = sql<
-      string | null
-    >`case when ${imMessageDeliveries.executionOrigin} = 'cloud' then null else ${imMessageDeliveries.turnReport} #>> '{usage,cachedInputTokens}' end`;
-    const outputTokensText = sql<
-      string | null
-    >`case when ${imMessageDeliveries.executionOrigin} = 'cloud' then null else ${imMessageDeliveries.turnReport} #>> '{usage,outputTokens}' end`;
-    const usageRows = (await this.#database
-      .select({
-        agentId: imBindings.agentId,
-        failed: sql<string>`count(*) filter (where ${imMessageDeliveries.turnReport} ->> 'outcome' = 'failed')::text`,
-        inputTokens: sql<string>`coalesce(sum(case when ${inputTokensText} ~ '^[0-9]+$' then (${inputTokensText})::numeric else 0::numeric end), 0)::text`,
-        cachedInputTokens: sql<string>`coalesce(sum(case when ${cachedInputTokensText} ~ '^[0-9]+$' then (${cachedInputTokensText})::numeric else 0::numeric end), 0)::text`,
-        outputTokens: sql<string>`coalesce(sum(case when ${outputTokensText} ~ '^[0-9]+$' then (${outputTokensText})::numeric else 0::numeric end), 0)::text`,
-        tasks: sql<string>`count(*)::text`,
-        invalidTokenCount: sql<boolean>`bool_or(
-          case when ${inputTokensText} is null then false
-            when ${inputTokensText} ~ '^[0-9]+$' then (${inputTokensText})::numeric > 9007199254740991
-            else true end or
-          case when ${cachedInputTokensText} is null then false
-            when ${cachedInputTokensText} ~ '^[0-9]+$' then (${cachedInputTokensText})::numeric > 9007199254740991
-            else true end or
-          case when ${outputTokensText} is null then false
-            when ${outputTokensText} ~ '^[0-9]+$' then (${outputTokensText})::numeric > 9007199254740991
-            else true end
-        )`,
-      })
-      .from(imMessageDeliveries)
-      .innerJoin(sessions, eq(sessions.id, imMessageDeliveries.sessionId))
-      .innerJoin(imBindings, eq(imBindings.id, sessions.imBindingId))
-      .where(
-        and(
-          inArray(
-            imBindings.agentId,
-            summaries.map((agent) => agent.id),
-          ),
-          gte(imMessageDeliveries.acceptedAt, usageStartedAt),
-          lte(imMessageDeliveries.acceptedAt, now),
-        ),
-      )
-      .groupBy(imBindings.agentId)) as AgentUsageAggregate[];
+    const { summaries, activityByAgent, usageRows } = read;
+    if (summaries.length === 0) return { agents: [] };
 
     const cloudTokens = await this.#cloudUsage?.totalsByAgent(callerUserId, AGENT_USAGE_WINDOW_DAYS, now);
     const usageByAgent = new Map<string, { failed: number; tasks: number; tokens: number }>();
@@ -824,7 +743,7 @@ export class AgentService {
       .limit(1);
     if (!row || row.createdByUserId !== callerUserId) throw resourceNotFound();
     const recoveryStartedAt = new Date(this.#now().getTime() - AGENT_ACTIVITY_RECOVERY_WINDOW_MS);
-    const activityByAgent = await this.#readActivityByAgent([agentId], recoveryStartedAt);
+    const activityByAgent = await this.#readActivityByAgent(this.#database, [agentId], recoveryStartedAt);
     return {
       ...toAgentSummary({ ...row, computer: toAgentComputer(row) }),
       activity: activityByAgent.get(agentId) ?? { state: "idle" },
@@ -836,89 +755,34 @@ export class AgentService {
     agentId: string,
     windowDays: AgentUsageWindowDays,
   ): Promise<AgentUsageDetail> {
-    const { agent } = await this.#resolveAgentScope(this.#database, callerUserId, agentId);
     const usageEndedAt = this.#now();
     const usageStartedAt = new Date(usageEndedAt.getTime() - windowDays * 24 * 60 * 60 * 1_000);
-    const rows = await this.#database
-      .select({
-        acceptedAt: imMessageDeliveries.acceptedAt,
-        executionOrigin: imMessageDeliveries.executionOrigin,
-        cachedInputTokens: sql<string | null>`${imMessageDeliveries.turnReport} #>> '{usage,cachedInputTokens}'`,
-        inputTokens: sql<string | null>`${imMessageDeliveries.turnReport} #>> '{usage,inputTokens}'`,
-        outcome: sql<string | null>`${imMessageDeliveries.turnReport} ->> 'outcome'`,
-        outputTokens: sql<string | null>`${imMessageDeliveries.turnReport} #>> '{usage,outputTokens}'`,
-      })
-      .from(imMessageDeliveries)
-      .innerJoin(sessions, eq(sessions.id, imMessageDeliveries.sessionId))
-      .innerJoin(imBindings, eq(imBindings.id, sessions.imBindingId))
-      .where(
-        and(
-          eq(imBindings.agentId, agentId),
-          gte(imMessageDeliveries.acceptedAt, usageStartedAt),
-          lte(imMessageDeliveries.acceptedAt, usageEndedAt),
-        ),
-      )
-      .orderBy(asc(imMessageDeliveries.acceptedAt), asc(imMessageDeliveries.id));
-
+    /*
+     * Authorization, the Provider rule that shapes the totals, and the aggregate read come from one
+     * read-only snapshot. Resolving ownership on the pool first let a transfer commit in between, so the
+     * previous owner could still read usage the new owner now owns, and the totals used whichever
+     * Provider the Agent had before the transfer. Both facts are read here under the same snapshot.
+     */
+    const usage = await this.#database.transaction(
+      async (transaction) => {
+        const { agent } = await this.#resolveAgentScope(transaction, callerUserId, agentId);
+        await this.#afterReadAuthorization?.("usage");
+        const usage = await readAgentUsageDaily(transaction, {
+          agentId,
+          provider: agent.runtimeProvider,
+          startedAt: usageStartedAt,
+          endedAt: usageEndedAt,
+        });
+        return usage;
+      },
+      { isolationLevel: "repeatable read", accessMode: "read only" },
+    );
     const result: AgentUsageDetail = {
       windowDays,
       startedAt: usageStartedAt.toISOString(),
       endedAt: usageEndedAt.toISOString(),
-      tasks: 0,
-      measuredTasks: 0,
-      failed: 0,
-      inputTokens: 0,
-      cachedInputTokens: 0,
-      outputTokens: 0,
-      tokens: 0,
-      daily: [],
+      ...usage,
     };
-    const daily = new Map<string, AgentUsageDetail["daily"][number]>();
-    const firstDate = Date.UTC(
-      usageStartedAt.getUTCFullYear(),
-      usageStartedAt.getUTCMonth(),
-      usageStartedAt.getUTCDate(),
-    );
-    const lastDate = Date.UTC(usageEndedAt.getUTCFullYear(), usageEndedAt.getUTCMonth(), usageEndedAt.getUTCDate());
-    for (let timestamp = firstDate; timestamp <= lastDate; timestamp += 24 * 60 * 60 * 1_000) {
-      const date = new Date(timestamp).toISOString().slice(0, 10);
-      daily.set(date, {
-        date,
-        tasks: 0,
-        measuredTasks: 0,
-        inputTokens: 0,
-        cachedInputTokens: 0,
-        outputTokens: 0,
-        tokens: 0,
-      });
-    }
-    for (const row of rows) {
-      if (!row.acceptedAt) continue;
-      result.tasks += 1;
-      if (row.outcome === "failed") result.failed += 1;
-      const tokenCounts =
-        row.executionOrigin === "cloud"
-          ? {
-              // The ledger measures model calls, not tasks; Runner reports cannot prove cloud coverage.
-              measured: false,
-              inputTokens: 0,
-              cachedInputTokens: 0,
-              outputTokens: 0,
-              tokens: 0,
-            }
-          : deliveryUsageTokenCounts(agent.runtimeProvider, row.inputTokens, row.cachedInputTokens, row.outputTokens);
-      if (tokenCounts.measured) result.measuredTasks += 1;
-      addUsageTokenCounts(result, tokenCounts);
-
-      const date = row.acceptedAt.toISOString().slice(0, 10);
-      const point = daily.get(date);
-      if (!point) throw new Error("Agent usage date falls outside the requested window");
-      point.tasks += 1;
-      if (tokenCounts.measured) point.measuredTasks += 1;
-      addUsageTokenCounts(point, tokenCounts);
-      daily.set(date, point);
-    }
-    result.daily = [...daily.values()];
     const cloud = await this.#cloudUsage?.readDetail(callerUserId, windowDays, agentId, usageEndedAt);
     mergeCloudUsage(result, cloud);
     return result;
@@ -1606,6 +1470,7 @@ export class AgentService {
           isNull(sessions.endedAt),
         ),
       );
+    await markEndedDescendantsInactive(transaction, { agentId });
   }
 
   async #lockAgentScopeForMutation(

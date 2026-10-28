@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, browserApi } from "../../api.js";
+import { overwriteGetLocale } from "../../paraglide/runtime.js";
 import { AgentSchedulesSection } from "./agent-schedules-section.js";
 
 const AGENT_ID = "10c4a3b9-1631-4e4b-8922-23932ea36237";
@@ -160,7 +161,7 @@ describe("AgentSchedulesSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Daily check" }));
     expect(await screen.findByText(item.prompt)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Last trigger/ }));
-    expect(screen.getByText(/Feishu channel test-chat, thread test-thread/)).toBeTruthy();
+    expect(screen.getByText(/Lark channel test-chat, thread test-thread/)).toBeTruthy();
     expect(detail).toHaveBeenCalledWith(AGENT_ID, SCHEDULE_ID);
   });
 
@@ -425,6 +426,8 @@ describe("AgentSchedulesSection", () => {
 it("shows next time relatively, refreshes it without reading private details and expands long instructions explicitly", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-10-26T08:00:00Z").getTime());
   const interval = vi.spyOn(window, "setInterval");
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(160);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(80);
   const item = schedule({ nextTriggerAt: "2026-10-26T10:00:00Z", prompt: "Check the build. ".repeat(50) });
   vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
   const detail = vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
@@ -446,7 +449,7 @@ it("shows next time relatively, refreshes it without reading private details and
   fireEvent.click(expand);
   expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
   expect(within(screen.getByRole("dialog")).getByText("Every 1 minute · Asia/Shanghai")).toBeTruthy();
-  expect(screen.getByText("Feishu conversation thread")).toBeTruthy();
+  expect(screen.getByText("Lark conversation thread")).toBeTruthy();
   expect(screen.queryByText(/test-chat/)).toBeNull();
 });
 
@@ -454,7 +457,7 @@ it.each([
   ["2026-10-26T08:00:30Z", "Due now"],
   ["2026-10-26T08:20:00Z", "Next in 20 minutes"],
   ["2026-10-28T08:00:00Z", "Next in 2 days"],
-  ["2026-10-26T07:58:00Z", "Due 2 minutes ago"],
+  ["2026-10-26T07:58:00Z", "Was due 2 minutes ago"],
 ])("labels the observed next occurrence %s as %s without fetching its prompt", async (nextTriggerAt, label) => {
   vi.spyOn(Date, "now").mockReturnValue(new Date("2026-10-26T08:00:00Z").getTime());
   const item = schedule({ nextTriggerAt });
@@ -483,4 +486,144 @@ it("describes a Slack conversation without inventing its name and keeps identifi
   expect(screen.queryByText(/example-chat/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Last trigger/ }));
   expect(screen.getByText("Slack channel example-chat")).toBeTruthy();
+});
+
+it("revalidates each due occurrence once and follows the server's next time without private reads", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-26T08:00:00Z"));
+  const interval = vi.spyOn(window, "setInterval");
+  const first = schedule({ nextTriggerAt: "2026-10-26T08:01:00Z" });
+  const advanced = schedule({
+    nextTriggerAt: "2026-10-26T08:04:00Z",
+    lastDispatch: {
+      scheduledFor: "2026-10-26T08:01:00Z",
+      attemptedAt: "2026-10-26T08:01:00Z",
+      outcome: "accepted",
+      code: null,
+      messageId: null,
+    },
+  });
+  const list = vi
+    .spyOn(browserApi, "agentSchedules")
+    .mockResolvedValueOnce({ items: [summaryOf(first)], nextCursor: null })
+    .mockResolvedValue({ items: [summaryOf(advanced)], nextCursor: null });
+  const detail = vi.spyOn(browserApi, "agentSchedule");
+  mount();
+  await screen.findByText("Next in 1 minute");
+  const tick = interval.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+  const advance = async (time: string) => {
+    clock.mockReturnValue(Date.parse(time));
+    await act(async () => {
+      if (typeof tick === "function") tick();
+    });
+  };
+  await advance("2026-10-26T08:01:00Z");
+  await screen.findByText("Next in 3 minutes");
+  expect(list).toHaveBeenCalledTimes(2);
+  await advance("2026-10-26T08:02:00Z");
+  expect(list).toHaveBeenCalledTimes(2);
+  await advance("2026-10-26T08:04:00Z");
+  expect(list).toHaveBeenCalledTimes(3);
+  await advance("2026-10-26T08:05:00Z");
+  await advance("2026-10-26T08:06:00Z");
+  expect(list).toHaveBeenCalledTimes(3);
+  expect(screen.getByText("Was due 2 minutes ago")).toBeTruthy();
+  expect(detail).not.toHaveBeenCalled();
+});
+
+it("retains summaries after a failed due refresh and recovers only on explicit retry", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-26T08:00:00Z"));
+  const interval = vi.spyOn(window, "setInterval");
+  const first = schedule({ nextTriggerAt: "2026-10-26T08:01:00Z" });
+  const list = vi
+    .spyOn(browserApi, "agentSchedules")
+    .mockResolvedValueOnce({ items: [summaryOf(first)], nextCursor: null })
+    .mockRejectedValueOnce(new Error("Unavailable"))
+    .mockResolvedValue({ items: [summaryOf(schedule({ nextTriggerAt: "2026-10-26T09:00:00Z" }))], nextCursor: null });
+  const detail = vi.spyOn(browserApi, "agentSchedule");
+  mount();
+  await screen.findByText("Next in 1 minute");
+  const tick = interval.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+  clock.mockReturnValue(Date.parse("2026-10-26T08:02:00Z"));
+  await act(async () => {
+    if (typeof tick === "function") tick();
+  });
+  await screen.findByText("Schedules could not be loaded.");
+  expect(screen.getByRole("button", { name: "Daily check" })).toBeTruthy();
+  clock.mockReturnValue(Date.parse("2026-10-26T08:03:00Z"));
+  await act(async () => {
+    if (typeof tick === "function") tick();
+  });
+  expect(list).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findByText("Next in 57 minutes");
+  expect(list).toHaveBeenCalledTimes(3);
+  expect(detail).not.toHaveBeenCalled();
+});
+
+it("does not refresh paused occurrences on the minute tick", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-26T08:00:00Z"));
+  const interval = vi.spyOn(window, "setInterval");
+  const list = vi
+    .spyOn(browserApi, "agentSchedules")
+    .mockResolvedValue({ items: [summaryOf(schedule({ enabled: false }))], nextCursor: null });
+  mount();
+  await screen.findByText("Paused");
+  expect(screen.queryByRole("img", { name: "Paused" })).toBeNull();
+  const tick = interval.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+  clock.mockReturnValue(Date.parse("2026-10-26T10:00:00Z"));
+  await act(async () => {
+    if (typeof tick === "function") tick();
+  });
+  expect(list).toHaveBeenCalledTimes(1);
+});
+
+it("offers expansion only when instructions overflow and responds to layout changes", async () => {
+  let resize: (() => void) | undefined;
+  const OriginalObserver = globalThis.ResizeObserver;
+  class LayoutObserver extends OriginalObserver {
+    constructor(callback: ResizeObserverCallback) {
+      super(callback);
+      resize = () => callback([], this);
+    }
+  }
+  vi.stubGlobal("ResizeObserver", LayoutObserver);
+  const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(40);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(40);
+  const item = schedule({
+    prompt: "Instructions that are longer than sixty characters but fit in the dialog at its current width.",
+  });
+  vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+  vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
+  try {
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
+    await screen.findByText(item.prompt);
+    expect(screen.queryByRole("button", { name: "Show full instructions" })).toBeNull();
+    height.mockReturnValue(120);
+    act(() => resize?.());
+    fireEvent.click(screen.getByRole("button", { name: "Show full instructions" }));
+    expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    height.mockReturnValue(40);
+    act(() => resize?.());
+    expect(screen.queryByRole("button", { name: "Show full instructions" })).toBeNull();
+  } finally {
+    vi.stubGlobal("ResizeObserver", OriginalObserver);
+  }
+});
+
+it("uses the Chinese messaging brand in both destination context and diagnostics", async () => {
+  overwriteGetLocale(() => "zh");
+  const item = schedule();
+  vi.spyOn(browserApi, "agentSchedules").mockResolvedValue({ items: [summaryOf(item)], nextCursor: null });
+  vi.spyOn(browserApi, "agentSchedule").mockResolvedValue(item);
+  try {
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Daily check" }));
+    expect(await screen.findByText("飞书 会话话题")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /上次触发/ }));
+    expect(screen.getByText("飞书 频道 test-chat，话题 test-thread")).toBeTruthy();
+  } finally {
+    overwriteGetLocale(() => "en");
+  }
 });

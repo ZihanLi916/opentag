@@ -90,7 +90,7 @@
   "agents_schedules_no_dispatch": "No handoff yet",
   "agents_schedules_no_retry": "The schedule will not retry this occurrence.",
   "agents_schedules_not_found": "This schedule no longer exists or is not accessible.",
-  "agents_schedules_overdue": "Due {time}",
+  "agents_schedules_overdue": "Was due {time}",
   "agents_schedules_pause": "Pause",
   "agents_schedules_paused": "Paused",
   "agents_schedules_prompt": "Instructions",

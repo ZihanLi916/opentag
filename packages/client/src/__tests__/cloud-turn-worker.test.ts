@@ -408,6 +408,7 @@ describe("cloud-turn-worker", () => {
     expect(Object.keys(models.providers)).toEqual(["opentag"]);
     expect(models.providers.opentag?.api).toBe("openai-completions");
     expect(models.providers.opentag?.baseUrl).toBe("https://server.example.com/api/v1/cloud-model");
+    expect(models.providers.opentag).toMatchObject({ headers: { "x-opentag-model-retry-owner": "proxy" } });
     expect(models.providers.opentag?.models[0]?.id).toBe("deepseek-v4.1-flash-expires-on-0910");
     // The Server-selected window and issued output budget reach Pi verbatim: Pi's native
     // compaction works against the real 258,000-token window, not its 128K custom-model default.
@@ -426,6 +427,13 @@ describe("cloud-turn-worker", () => {
     expect(settings.defaultModel).toBe("opentag/deepseek-v4.1-flash-expires-on-0910");
     // Native auto-compaction is explicitly enabled; Pi's pinned reserve/keep defaults stay untouched.
     expect(settings.compaction).toEqual({ enabled: true });
+    expect(settings).toMatchObject({
+      retry: {
+        enabled: false,
+        maxRetries: 0,
+        provider: { maxRetries: 0 },
+      },
+    });
   });
 
   it("resumes the SAME Pi binding/history across two Turns of one allocation", async () => {
@@ -503,7 +511,7 @@ describe("cloud-turn-worker", () => {
       const systemPrompt = entry.args[entry.args.indexOf("--append-system-prompt") + 1];
       expect(systemPrompt).toContain("slack api chat.postMessage --json");
       expect(systemPrompt).toContain("messages-resources-download");
-      expect(systemPrompt).toContain("GitHub integration, when enabled");
+      expect(systemPrompt).toContain("Use this Agent's connected GitHub MCP tools");
       expect(entry.environment.HOME).not.toBe(process.env.HOME);
       expect(entry.environment.OPENTAG_RUNNER_BOOTSTRAP_TOKEN).toBeUndefined();
       expect(entry.environment.GITHUB_TOKEN).toBeUndefined();
