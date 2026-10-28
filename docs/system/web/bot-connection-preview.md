@@ -64,6 +64,12 @@ reopen the tools; a reload starts a fresh in-memory session.
 - Chinese is the default for this preview origin. The language toggle persists the
   explicit selection. Light/dark changes are local to this document.
 
+Messaging actions keep compact desktop sizing, with a 44px minimum below 768px
+and for coarse pointers. Provider cards and activation actions use the shared
+focus token; the connection accent remains a brand decoration. When reviewing
+responsive changes, inspect computed control sizes at 767px and 768px as well
+as common phone widths, and check keyboard focus in both themes.
+
 ## Editing map
 
 All paths below are relative to `apps/web/`.

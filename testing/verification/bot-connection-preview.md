@@ -273,3 +273,69 @@ reviewed base, not to a rebuilt latest-main integration. CI must validate the PR
 Local machine paths were removed from the published validation log.
 The preview server must be running for its localhost URL to work; see the
 [run and editing guide](../../docs/system/web/bot-connection-preview.md).
+
+
+## Accessibility review corrections (2026-10-28)
+
+Scope: address the two review findings on `0c297b8a`, without changing connection
+behavior, provider adapters, dependencies, or desktop layout.
+
+- Reproduced 32px Slack Copy, Manual setup, Cancel and Connect at 390px, plus a
+  teal provider-card outline (`#00cbb4`) on white before the fix.
+- All five compact messaging button recipes now consume the same scoped minimum
+  height. It changes from 32px to 44px below 768px or with a coarse pointer, so
+  selector specificity cannot defeat the responsive value. The permissions
+  disclosure keeps its 40px desktop minimum and uses 44px in the same contexts.
+- Removed the connection scope's override of the shared focus token and reused
+  that token for activation actions. Teal brand decoration is unchanged.
+
+### Production-bundle browser verification
+
+Built with `pnpm --filter @opentag/web build:bot-preview`, served using
+`preview:bot-preview`. Measurements below use actual DOM rectangles and computed
+styles, not jsdom CSS assertions. Browser pointer was fine; coarse-pointer
+emulation is unavailable in the current browser tool and physical touch was not
+verified. The width condition applies independently of pointer type.
+
+| Surface / controls | 320px | 390px | 767px | 768px | 1440px |
+| --- | --- | --- | --- | --- | --- |
+| Slack Copy, Manual setup, Cancel, Connect | 44px | 44px | 44px | 32px | 32px |
+| Slack code input | 44px | 44px | 44px | 40px | 40px |
+| Feishu QR Cancel | 44px | 44px | 44px | 32px | 32px |
+
+No page-level horizontal overflow at any width above. At 390px, manual Slack
+Help/Back/Cancel/Save and both credential inputs measured 44px; failure recovery
+Manual setup/Cancel/Reauthorize measured 44px. Feishu waiting Check/Disconnect,
+recovery Disconnect/Replace/Reconnect, and automatic-retry Permissions/Cancel/Check
+all measured 44px. Ready still states that real delivery needs a message and reply.
+
+Keyboard Tab focused the provider card, Enter opened Feishu, and Slack Back,
+invalid-code submission, reauthorization (fresh command with empty code), and
+Cancel remained interactive. Focus-visible provider outlines measured:
+
+| Theme | Outline | Adjacent card | Contrast |
+| --- | --- | --- | --- |
+| Light | `rgb(105, 117, 134)` | `rgb(255, 255, 255)` | 4.68:1 |
+| Dark | `rgb(196, 181, 255)` | `rgb(35, 33, 39)` | 8.65:1 |
+
+The focused activation Check action also uses `rgb(105, 117, 134)` in light mode.
+Both themes retain the `#00cbb4` connection accent.
+
+Screenshots are **isolated mock fixtures**, with preview controls hidden:
+
+- [Slack at 390px](../web-ui/bot-connection-preview/a11y-slack-390.png)
+- [Feishu at 390px](../web-ui/bot-connection-preview/a11y-feishu-390.png)
+- [Provider keyboard focus](../web-ui/bot-connection-preview/a11y-provider-focus.png)
+
+### Automated checks and limits
+
+- Four focused Web files / **167 tests passed**: `slack-auto-connect`,
+  `agent-setup-page`, `agent-setup-page-recovery`, and `bot-preview/playground`.
+- Production-component preview build passed; existing Vite chunk-size warning remains.
+- Root `pnpm check` and `git diff --check` passed.
+- No live Slack/Feishu authorization, Server/Daemon handoff, real message delivery,
+  physical touch device or hardware screen reader was tested in this CSS fix.
+- The full Web suite result above belongs to the preceding integration commit;
+  it was not repeated for this bounded CSS change. CI and ownership approval remain
+  required before merge. Axe was not rerun: the reported blockers are verified by
+  explicit target-size and contrast measurements.

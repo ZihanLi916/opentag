@@ -477,11 +477,11 @@
   --color-kumo-fill-hover: var(--connection-hover);
   --text-color-kumo-strong: var(--connection-foreground);
   --text-color-kumo-subtle: var(--connection-secondary);
-  --focus: var(--connection-accent);
   color: var(--connection-foreground);
 }
 
 .otv2-messaging-settings {
+  --connection-control-min-height: 32px;
   gap: 0.75rem;
 }
 
@@ -501,7 +501,7 @@
 }
 
 .otv2-messaging-settings .otv2-slack-inline .ui-button {
-  min-height: 32px;
+  min-height: var(--connection-control-min-height);
   height: auto;
   padding: 0.375rem 0.75rem;
   border-radius: 0.5rem;
@@ -556,7 +556,7 @@
   display: flex;
   width: 100%;
   height: auto;
-  min-height: 40px;
+  min-height: max(40px, var(--connection-control-min-height));
   justify-content: space-between;
   padding: 0.625rem 1rem;
   border-radius: 0;
@@ -583,7 +583,7 @@
 
 .otv2-messaging-settings .otv2-activation-actions .ui-button {
   border-radius: 0.5rem;
-  min-height: 32px;
+  min-height: var(--connection-control-min-height);
   height: auto;
   padding: 0.375rem 0.75rem;
   font-size: 0.8125rem;
@@ -608,7 +608,7 @@
 }
 
 .otv2-messaging-settings .otv2-activation-actions .ui-button:focus-visible {
-  outline: 2px solid var(--connection-accent);
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -732,7 +732,7 @@
 }
 
 .otv2-messaging-settings [data-ui="agent-setup-messaging-configuration"] .ui-button {
-  min-height: 32px;
+  min-height: var(--connection-control-min-height);
   height: auto;
   border-radius: 0.5rem;
   padding: 0.375rem 0.75rem;
@@ -810,7 +810,7 @@
 }
 
 .otv2-messaging-settings .otv2-connection-card__footer .ui-button {
-  min-height: 32px;
+  min-height: var(--connection-control-min-height);
   height: auto;
   border-radius: 0.5rem;
   padding: 0.375rem 0.75rem;
@@ -964,7 +964,7 @@
 
 .otv2-messaging-settings .otv2-messaging-recovery__footer .ui-button {
   width: auto;
-  min-height: 32px;
+  min-height: var(--connection-control-min-height);
   height: auto;
   border-radius: 0.5rem;
   padding: 0.375rem 0.75rem;
@@ -1104,9 +1104,14 @@
   }
 }
 
-@media (pointer: coarse) {
+/* Keep compact selectors accessible regardless of their specificity or pointer type. */
+@media (width < 768px), (pointer: coarse) {
+  .otv2-messaging-settings {
+    --connection-control-min-height: 44px;
+  }
+
   .otv2-messaging-settings .ui-button {
-    min-height: 44px;
+    min-height: var(--connection-control-min-height);
   }
 }
 
