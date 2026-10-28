@@ -970,11 +970,12 @@ export class McpOAuthFlowService {
           ciphertext: sealed.ciphertext,
           keyId: sealed.keyId,
           oauthResource: resource,
-          scopes: tokens.scope
-            ? grantedMcpScopes(tokens.scope, metadata.issuer)
-            : "version" in flow
-              ? flow.scopes
-              : authorization.scopes,
+          scopes:
+            tokens.scope !== undefined
+              ? grantedMcpScopes(tokens.scope, metadata.issuer)
+              : "version" in flow
+                ? flow.scopes
+                : authorization.scopes,
           accessTokenExpiresAt: accessTokenExpiry(now, tokens.expiresIn),
           failureCode: null,
           state: null,
@@ -1330,6 +1331,8 @@ export class McpOAuthFlowService {
         client,
         resource,
       });
+      const scopes = tokens.scope === undefined ? undefined : grantedMcpScopes(tokens.scope, metadata.issuer);
+      const scopeUpdate = scopes === undefined ? {} : { scopes };
       await this.#database.transaction(async (transaction) => {
         await lockMcpAccounts(transaction, [row.accountId]);
         const current = await readMcpCredentialRoot(transaction, row.accountId, authorizationId);
@@ -1359,7 +1362,7 @@ export class McpOAuthFlowService {
             ciphertext: sealed.ciphertext,
             keyId: sealed.keyId,
             accessTokenExpiresAt: accessTokenExpiry(now, tokens.expiresIn),
-            ...(tokens.scope ? { scopes: grantedMcpScopes(tokens.scope, metadata.issuer) } : {}),
+            ...scopeUpdate,
             status: "active",
             failureCode: null,
             refreshClaimId: null,
@@ -1377,9 +1380,10 @@ export class McpOAuthFlowService {
           )
           .returning({ id: mcpServerAuthorizations.id });
         if (!stored) throw new McpServiceError(MCP_ERROR_CODES.OAUTH_FLOW_INVALID, "The refresh result was superseded");
+        if (scopes !== undefined && !sameScopeSet(root.scopes, scopes))
+          await invalidateMcpCredentialProbes(transaction, root.id);
       });
-      // A successful refresh does not re-probe: the tool list is a snapshot of the Server, not of
-      // this token, and the credential change alone is not evidence the capabilities moved.
+      // Token rotation alone keeps each Agent's tool snapshot.
     } catch (error) {
       this.#logger?.warn(
         {
@@ -1605,6 +1609,13 @@ function requireMcpFlowRoot(
 function grantedMcpScopes(value: string, issuer: string) {
   const github = MCP_STATIC_OAUTH_PROVIDERS.find((provider) => provider.brand === "github");
   return value.split(issuer === github?.issuer ? /[,\s]+/ : /\s+/).filter(Boolean);
+}
+
+function sameScopeSet(previous: string[] | null, next: string[]) {
+  if (!previous) return false;
+  const scopes = new Set(previous.filter((scope) => scope !== "offline_access"));
+  const granted = new Set(next.filter((scope) => scope !== "offline_access"));
+  return scopes.size === granted.size && [...granted].every((scope) => scopes.has(scope));
 }
 
 function refreshFailureCode(error: unknown, requestDispatched: boolean) {

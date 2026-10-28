@@ -837,6 +837,7 @@ export class BrowserApi {
       {
         method: "POST",
         body: JSON.stringify({ ...input, scopes }),
+        headers: { "content-type": "application/json", ...this.csrfHeaders() },
       },
     );
   }
@@ -876,6 +877,7 @@ export class BrowserApi {
     return this.request(`${agentMcpAuthorizationPath(agentId, mcpServerId)}/connect`, ConnectMCPOAuthResponseSchema, {
       method: "POST",
       body: JSON.stringify({ scopes }),
+      headers: { "content-type": "application/json", ...this.csrfHeaders() },
     });
   }
 
@@ -883,6 +885,7 @@ export class BrowserApi {
     return this.requestNoContent(`${agentMcpAuthorizationPath(agentId, mcpServerId)}/flow`, {
       method: "DELETE",
       body: JSON.stringify({ authenticationId, expectedRevision }),
+      headers: { "content-type": "application/json", ...this.csrfHeaders() },
     });
   }
 
@@ -890,6 +893,7 @@ export class BrowserApi {
     return this.requestNoContent(`${agentMcpAuthorizationPath(agentId, mcpServerId)}/family`, {
       method: "DELETE",
       body: JSON.stringify({ authenticationId, agentCount }),
+      headers: { "content-type": "application/json", ...this.csrfHeaders() },
     });
   }
 

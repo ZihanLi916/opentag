@@ -72,6 +72,15 @@ describe("shared MCP authentication", () => {
     expect((await f.auth.buildHeaders(f.accountId, b, f.server.id)).authorization).toBe("Bearer new-consent");
     expect((await f.servers.listAuthenticationViews(f.accountId, b))[0]?.status).toBe("connected");
   });
+  it("records an explicitly empty granted scope instead of the requested scope", async () => {
+    const f = await sharedMcpFixture(unit.database);
+    const b = f.ids[1] as string;
+    await f.connect(b);
+    f.exchange.mockResolvedValue({ accessToken: "empty-scope", expiresIn: 3600, scope: "" });
+    const state = await f.start(b);
+    await f.flows.callback({ code: "code", state }, SHARED_PROOF);
+    expect((await f.row(f.ids[0] as string))?.scopes).toEqual([]);
+  });
   it("does not switch an existing expired binding to a different valid root", async () => {
     const f = await sharedMcpFixture(unit.database);
     const b = f.ids[1] as string;

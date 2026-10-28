@@ -432,16 +432,31 @@ export class McpAuthorizationService {
       if (!row?.ciphertext || !row.keyId || !row.authorizationServer) break;
       rejected.push(row.id);
       if (candidate?.authorization?.status !== "active") continue;
-      const credential = this.#cipher.decryptAuthorizationCredential(
-        { mcpServerId: row.mcpServerId, agentId: row.agentId, authorizationServer: row.authorizationServer },
-        { ciphertext: row.ciphertext, keyId: row.keyId },
-      );
-      if (!(await this.#matchesRegistration(transaction, accountId, row, credential.clientId))) continue;
-      if (!this.#reusableClient(effective.url, row.authorizationServer, credential.clientId, row.clientRegistrationId))
+      const credential = this.#reusableCredential(row, { ciphertext: row.ciphertext, keyId: row.keyId });
+      if (
+        !credential ||
+        !(await this.#matchesRegistration(transaction, accountId, row, credential.clientId)) ||
+        !this.#reusableClient(effective.url, row.authorizationServer, credential.clientId, row.clientRegistrationId)
+      )
         continue;
       return row;
     }
     return undefined;
+  }
+
+  #reusableCredential(
+    row: typeof mcpServerAuthorizations.$inferSelect,
+    material: { ciphertext: string; keyId: string },
+  ) {
+    try {
+      return this.#cipher.decryptAuthorizationCredential(
+        { mcpServerId: row.mcpServerId, agentId: row.agentId, authorizationServer: row.authorizationServer },
+        material,
+      );
+    } catch {
+      this.#logger?.warn({ authorizationId: row.id }, "Unreadable MCP reuse candidate skipped");
+      return undefined;
+    }
   }
 
   async #matchesRegistration(

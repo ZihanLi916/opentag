@@ -44,6 +44,14 @@ The lookup reuses the same root eligibility query as Connect, including explicit
 
 Agent self-configuration keeps the opt-in checks and cannot call the Account-only lookup/Connect endpoints. Its OAuth browser handoff consumes proof under Account admission and the stable root identity. The handoff is exercised after holder transfer and remains single use.
 
+## Review regression coverage
+
+The BrowserApi CSRF inventory includes all six shared-authentication methods. It exercises outgoing requests rather than mocked domain methods, verifies the double-submit header on every mutation, and explicitly checks JSON content types for installation lookup, Connect, shared cancellation and family disconnect. These four requests previously omitted both headers even though component mocks passed.
+
+PostgreSQL regressions run a tool probe across a successful refresh that narrows or clears granted scopes. Both holder and reference snapshots must become pending with no tools, and the old probe must not restore its result. Scope ordering, duplicates and lifecycle-only `offline_access` changes retain snapshots; an explicitly empty granted scope remains empty rather than inheriting requested scopes. Separate installation tests make an old envelope unreadable and verify selection of a later valid source or return to ordinary OAuth without mutating the unreadable source.
+
+The review repair is validated by 22 MCP Server unit files / 761 tests, the shared-authentication PostgreSQL file / 15 tests, and two BrowserApi files / 34 tests. Repository checks, type checks and builds run separately. No schema or rendered layout changes are part of this repair, so the original migration and browser evidence remains scoped to the initial implementation.
+
 ## Deployment acceptance
 
 Local tests do not establish a deployed feature or a GitHub business operation. This change defaults `OPENTAG_MCP_OAUTH_REUSE` to false. Upgrade and drain every old Server/Worker before enabling it; turning it off later must not disable existing references.

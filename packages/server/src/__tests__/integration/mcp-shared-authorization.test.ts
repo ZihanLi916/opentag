@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDatabaseClient } from "../../db/client.js";
 import { mcpServerAuthorizations, users } from "../../db/schema/index.js";
 import { AgentService } from "../../services/agents/agent-service.js";
 import { MCP_ERROR_CODES } from "../../services/mcp/errors.js";
+import { McpAuthorizationService } from "../../services/mcp/mcp-authorization-service.js";
+import type { McpProbeResult } from "../../services/mcp/mcp-probe.js";
 import { OnboardingResetService } from "../../services/onboarding-reset/index.js";
 import { deferred } from "../support/deferred.js";
 import { SHARED_ISSUER, SHARED_PROOF, SHARED_URL, sharedMcpFixture } from "../support/mcp-shared-authorization.js";
@@ -75,6 +77,83 @@ describe("shared MCP authentication on PostgreSQL", () => {
     expect(holder?.refreshGeneration).toBe(f.root.refreshGeneration + 1);
     expect(holder?.refreshClaimId).toBeNull();
     expect(f.refresh).toHaveBeenCalledTimes(1);
+  });
+  it.each(["read", ""])(
+    "invalidates every member's tools and fences an old probe when refresh scopes become %j",
+    async (scope) => {
+      const f = await sharedMcpFixture(client.database);
+      const [a, b] = f.ids as [string, string];
+      await f.connect(b);
+      const tools = [{ name: "write", description: null, inputSchema: null }];
+      await client.database
+        .update(mcpServerAuthorizations)
+        .set({ tools, toolsCount: 1, probeState: "succeeded" })
+        .where(eq(mcpServerAuthorizations.mcpServerId, f.server.id));
+      await client.database
+        .update(mcpServerAuthorizations)
+        .set({ scopes: ["read", "write"] })
+        .where(eq(mcpServerAuthorizations.id, f.root.id));
+      const sent = deferred();
+      const reply = deferred<McpProbeResult>();
+      const auth = new McpAuthorizationService({
+        database: client.database,
+        cipher: f.cipher,
+        servers: f.servers,
+        probe: {
+          probe: vi.fn(async () => {
+            sent.resolve();
+            return reply.promise;
+          }),
+        } as never,
+      });
+      const probing = auth.probe(f.accountId, b, f.server.id);
+      try {
+        await sent.promise;
+        f.refresh.mockResolvedValue({ accessToken: "narrower", refreshToken: "rotated", expiresIn: 3600, scope });
+        await f.flows.refreshAuthorization(f.root.id);
+      } finally {
+        reply.resolve({
+          probeState: "succeeded",
+          protocolEra: "modern",
+          protocolVersion: "2026-07-28",
+          serverInfo: null,
+          capabilities: null,
+          instructions: null,
+          tools,
+          toolsCount: 1,
+          toolsTruncated: false,
+          toolsSkipped: 0,
+          probeError: null,
+          eraInvalidated: false,
+        });
+        await probing;
+      }
+      expect(await f.row(a)).toMatchObject({
+        scopes: scope ? [scope] : [],
+        tools: null,
+        toolsCount: null,
+        probeState: "pending",
+      });
+      expect(await f.row(b)).toMatchObject({ tools: null, toolsCount: null, probeState: "pending" });
+    },
+  );
+  it("retains tool snapshots when only scope order, duplicates or offline_access changes", async () => {
+    const f = await sharedMcpFixture(client.database);
+    const [a, b] = f.ids as [string, string];
+    await f.connect(b);
+    await client.database
+      .update(mcpServerAuthorizations)
+      .set({ tools: [{ name: "read" }], toolsCount: 1, probeState: "succeeded" })
+      .where(eq(mcpServerAuthorizations.mcpServerId, f.server.id));
+    await client.database
+      .update(mcpServerAuthorizations)
+      .set({ scopes: ["read", "write", "offline_access"] })
+      .where(eq(mcpServerAuthorizations.id, f.root.id));
+    const before = await f.row(b);
+    f.refresh.mockResolvedValue({ accessToken: "rotated", expiresIn: 3600, scope: "write read read" });
+    await f.flows.refreshAuthorization(f.root.id);
+    expect(await f.row(a)).toMatchObject({ toolsCount: 1, probeState: "succeeded" });
+    expect(await f.row(b)).toMatchObject({ toolsCount: 1, probeState: "succeeded", revision: before?.revision });
   });
   it("preserves a refresh committed before holder handoff", async () => {
     const f = await sharedMcpFixture(client.database);

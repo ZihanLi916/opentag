@@ -48,7 +48,9 @@ so an earlier lookup does not grant access after revocation or a configuration c
 
 Connect selects a usable root on the mounted definition with
 identical effective URL, header, scheme and extra headers, compatible granted scopes and a provable
-OAuth client binding. Selection is `created_at ASC, id ASC`, with one bounded database candidate at
+OAuth client binding. Unreadable candidate envelopes are logged by authentication ID and skipped;
+they neither block a later usable candidate nor mutate the old authentication. Selection is
+`created_at ASC, id ASC`, with one bounded database candidate at
 a time and no browser chooser. Up to 100 invalid historical candidates are inspected per attempt.
 `offline_access` is lifecycle permission rather than an additional business permission for matching.
 A refresh claim or live consent flow does not exclude a root whose access credential still works.
@@ -816,6 +818,12 @@ telling the UI that a result is still coming.
 
 ### Refresh
 
+An explicit granted `scope` replaces the recorded scopes, including an explicitly empty scope.
+Changed resource scopes invalidate every member's tool snapshot and probe revision in the same
+transaction as the refresh result, so late probes cannot restore old-permission tools. Scope order,
+duplicates and lifecycle-only `offline_access` changes do not invalidate tools; an omitted scope
+retains the recorded permissions and snapshots.
+
 Refresh happens only for rows whose `kind='oauth'` and whose expiry is near, and it never
 re-discovers: it uses the endpoint the row already recorded, so a peer cannot move this client's
 token endpoint mid-flight.
@@ -839,7 +847,7 @@ has an unknown outcome; it fails closed instead of being taken over and replayed
 
 | Observation | Verdict | Action |
 | --- | --- | --- |
-| Token endpoint 2xx | Success | New envelope, `refresh_generation += 1`, claim cleared, **no re-probe** |
+| Token endpoint 2xx | Success | New envelope, `refresh_generation += 1`, claim cleared; retain snapshots for token rotation alone, invalidate all member snapshots if resource scopes change |
 | `invalid_grant` | **Terminal** | `revoked`; the user must authorize again |
 | `invalid_client` | **Terminal** | `revoked`; the user must re-register the client |
 | Transport failure, timeout, 5xx, unparseable | **Outcome unknown** | `error` with `failure_code = MCP_REFRESH_OUTCOME_UNKNOWN`, clear potentially consumed credential material, require reauthorization, **never** auto-retry |

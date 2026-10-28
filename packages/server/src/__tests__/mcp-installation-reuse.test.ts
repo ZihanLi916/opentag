@@ -3,8 +3,10 @@ import type { CreateMCPServerRequest } from "@opentag/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mcpServerAuthorizations, mcpServers } from "../db/schema/index.js";
+import { ApplicationCipher } from "../services/crypto.js";
 import { MCP_ERROR_CODES } from "../services/mcp/errors.js";
 import { McpAuthorizationService } from "../services/mcp/mcp-authorization-service.js";
+import { McpCredentialCipher } from "../services/mcp/mcp-credential-cipher.js";
 import { McpServerService } from "../services/mcp/mcp-server-service.js";
 import { SHARED_ISSUER, SHARED_URL, sharedMcpFixture } from "./support/mcp-shared-authorization.js";
 import { createUnitDatabase, type UnitDatabase } from "./support/unit-database.js";
@@ -104,6 +106,28 @@ describe("ordinary MCP installation selection", () => {
       code: MCP_ERROR_CODES.SERVER_NOT_FOUND,
     });
   });
+  it.each([true, false])(
+    "skips an unreadable historical credential instead of blocking new connections (another source: %j)",
+    async (anotherSource) => {
+      const f = await sharedMcpFixture(unit.database);
+      const b = f.ids[1] as string;
+      const fallback = anotherSource ? await f.authorize(f.ids[2] as string) : undefined;
+      const oldCipher = new McpCredentialCipher(new ApplicationCipher(new Uint8Array(32).fill(9)));
+      const unreadable = oldCipher.encryptAuthorizationCredential(
+        { mcpServerId: f.server.id, agentId: f.ids[0] as string, authorizationServer: SHARED_ISSUER },
+        { accessToken: "unreadable", clientId: f.oauth.clientMetadataUrl },
+      );
+      await unit.database
+        .update(mcpServerAuthorizations)
+        .set(unreadable)
+        .where(eq(mcpServerAuthorizations.id, f.root.id));
+      const selected = await f.auth.findReusableInstallation(f.accountId, b, input);
+      expect(selected?.id ?? null).toBe(anotherSource ? f.server.id : null);
+      expect(await f.connect(b)).toBe(anotherSource);
+      expect((await f.row(b))?.credentialSourceId).toBe(fallback?.id);
+      expect(f.exchange).not.toHaveBeenCalled();
+    },
+  );
   it("keeps installation selection disabled with the new-reuse gate", async () => {
     const f = await sharedMcpFixture(unit.database);
     const servers = new McpServerService({ database: unit.database, cipher: f.cipher });
