@@ -26,8 +26,13 @@ import {
 import { isHostedEnvironment, parseServerConfig, type ServerConfig, serverEnvironmentSummary } from "./config.js";
 import { createDatabaseClient, type DatabaseClient } from "./db/client.js";
 import { migrateDatabase, verifyDatabaseMigrations } from "./db/migrate.js";
-import { createDedicatedDatabaseReadinessProbe, DATABASE_READINESS_TIMEOUT_MS } from "./db/readiness-probe.js";
+import {
+  createApplicationDatabaseReadinessProbe,
+  createDedicatedDatabaseReadinessProbe,
+  DATABASE_READINESS_TIMEOUT_MS,
+} from "./db/readiness-probe.js";
 import { agents, computers } from "./db/schema/index.js";
+import { DATABASE_CLOSE_TIMEOUT_SECONDS } from "./db/timeouts.js";
 import {
   createBackgroundFailureSupervisor,
   createErrorReporter,
@@ -141,6 +146,7 @@ import { AccountSetupService } from "./services/setup/index.js";
 import { S3SkillObjectStore, SkillObjectGc, SkillPresetService, SkillService } from "./services/skills/index.js";
 import { RemoteSkillService } from "./services/skills/source/remote-skill-service.js";
 import { TaskService } from "./services/tasks/index.js";
+import { closeServerResources } from "./shutdown.js";
 import { defaultWebAppRoot } from "./web-app.js";
 
 export { bootstrapInitialAdmin } from "./admin/bootstrap.js";
@@ -1120,7 +1126,7 @@ export async function startServer(): Promise<void> {
       sessions: sessionService,
     });
     app = createApp({
-      databaseReadinessProbe: databaseReadinessProbe.run,
+      databaseReadinessProbe: createApplicationDatabaseReadinessProbe(sql, databaseReadinessProbe),
       deployment: deploymentProof(config),
       loggerLevel: config.logLevel,
       trustProxy: config.trustProxy,
@@ -1311,7 +1317,17 @@ export async function startServer(): Promise<void> {
     skillRuntime.gc?.start();
     channelTargetPoller.start();
     const closeForSignal = () => {
-      void app?.close();
+      void app?.close().catch((error) => {
+        const failures = (error instanceof AggregateError ? error.errors : [error]).map((failure) => ({
+          detail: formatStartupError(failure, knownSecrets),
+          cause:
+            failure instanceof Error && failure.cause !== undefined
+              ? formatStartupError(failure.cause, knownSecrets)
+              : undefined,
+        }));
+        app?.log.error({ failures }, "Failed to close OpenTag server");
+        process.exitCode = 1;
+      });
     };
     process.once("SIGINT", closeForSignal);
     process.once("SIGTERM", closeForSignal);
@@ -1322,23 +1338,26 @@ export async function startServer(): Promise<void> {
       process.off("SIGINT", closeForSignal);
       process.off("SIGTERM", closeForSignal);
       const imagePrewarmStopped = runnerImagePrewarmWorker?.stop();
-      await scheduleScheduler.stop();
-      channelTargetPoller.stop();
-      await sandboxIdleReclaimer?.stop();
-      imDeliveryWorker.stop();
-      await slackWorkingWorker.stop();
-      await imFailureReactions?.close();
-      mcpRefreshWorker.stop();
-      skillRuntime.gc?.stop();
-      if (github) await github.worker.stop();
-      await githubContextTreeOperations?.close();
-      await platformRuntime.close();
-      await feishuSetupService.stop();
-      await feishuConnections.stop();
-      await imagePrewarmStopped;
-      await databaseReadinessProbe.close();
-      await sql.end();
-      await shutdownTelemetry();
+      void imagePrewarmStopped?.catch(() => undefined);
+      await closeServerResources([
+        ["schedule scheduler", () => scheduleScheduler.stop()],
+        ["channel target poller", () => channelTargetPoller.stop()],
+        ["sandbox idle reclaimer", () => sandboxIdleReclaimer?.stop()],
+        ["IM delivery worker", () => imDeliveryWorker.stop()],
+        ["Slack working worker", () => slackWorkingWorker.stop()],
+        ["IM failure reactions", () => imFailureReactions?.close()],
+        ["MCP refresh worker", () => mcpRefreshWorker.stop()],
+        ["skill garbage collector", () => skillRuntime.gc?.stop()],
+        ["GitHub worker", () => github?.worker.stop()],
+        ["GitHub Context Tree operations", () => githubContextTreeOperations?.close()],
+        ["platform runtime", () => platformRuntime.close()],
+        ["Feishu setup service", () => feishuSetupService.stop()],
+        ["Feishu connections", () => feishuConnections.stop()],
+        ["runner image prewarm worker", () => imagePrewarmStopped],
+        ["database readiness probe", () => databaseReadinessProbe.close()],
+        ["database pool", () => sql.end({ timeout: DATABASE_CLOSE_TIMEOUT_SECONDS })],
+        ["telemetry", () => shutdownTelemetry()],
+      ]);
     });
     app.log.info(serverEnvironmentSummary(config), "Resolved OpenTag environment");
     app.log.info({ databaseTimeouts: config.databaseTimeouts }, "Resolved database timeouts");
