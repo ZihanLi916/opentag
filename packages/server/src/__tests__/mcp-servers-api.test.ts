@@ -125,6 +125,9 @@ interface Harness {
     probe: ReturnType<typeof vi.fn>;
     revoke: ReturnType<typeof vi.fn>;
     setBearerOrNone: ReturnType<typeof vi.fn>;
+    connectOAuth: ReturnType<typeof vi.fn>;
+    findReusableInstallation: ReturnType<typeof vi.fn>;
+    cancelSharedFlow: ReturnType<typeof vi.fn>;
   };
   flows: {
     catalogEndpoints: ReturnType<typeof vi.fn>;
@@ -136,6 +139,8 @@ interface Harness {
     | "createServer"
     | "deleteServer"
     | "detachServer"
+    | "listAuthenticationViews"
+    | "detachAuthorizationFamily"
     | "getServerDetail"
     | "listAgentServers"
     | "listAvailableServers"
@@ -174,6 +179,20 @@ function build(
 ): Harness {
   const servers = {
     attachServer: vi.fn(async () => AGENT_SERVER_DTO),
+    listAuthenticationViews: vi.fn(async () => [
+      {
+        mcpServerId: SERVER,
+        authenticationId: ACCOUNT,
+        authenticationRevision: 1,
+        credentialGeneration: 0,
+        status: "connected",
+        failureCode: null,
+        authorizationExpiresAt: null,
+        flowExpiresAt: null,
+        agentCount: 2,
+      },
+    ]),
+    detachAuthorizationFamily: vi.fn(async () => undefined),
     createServer: vi.fn(async () => SERVER_DTO),
     deleteServer: vi.fn(async () => undefined),
     detachServer: vi.fn(async () => undefined),
@@ -189,6 +208,9 @@ function build(
     updateServer: vi.fn(async () => SERVER_DTO),
   };
   const authorization = {
+    connectOAuth: vi.fn(async () => true),
+    findReusableInstallation: vi.fn(async () => SERVER_DTO),
+    cancelSharedFlow: vi.fn(async () => undefined),
     probe: vi.fn(async () => PROBE_OUTCOME),
     revoke: vi.fn(async () => undefined),
     setBearerOrNone: vi.fn(async () => undefined),
@@ -647,6 +669,7 @@ describe("MCP management authentication", () => {
     ["GET", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}`],
     ["GET", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}/available`],
     ["POST", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}`],
+    ["POST", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}/reusable-installation`],
     ["PATCH", `${AGENT_MCP_SERVER_TEMPLATE_PATH}`],
     ["DELETE", `${AGENT_MCP_SERVER_TEMPLATE_PATH}`],
     ["PUT", `${AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH}`],
@@ -769,5 +792,87 @@ describe("MCP management authentication", () => {
     const response = await app.inject({ method: "GET", url: MCP_SERVERS_PATH, headers: SESSION_COOKIE });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ servers: [SERVER_DTO] });
+  });
+});
+
+describe("shared MCP authentication routes", () => {
+  it("returns one safe batch authentication view with no credential or flow secret", async () => {
+    const h = build();
+    const result = await send(h.app, "GET", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}/authentications`);
+    expect(result.response.statusCode).toBe(200);
+    expect(result.body).toEqual({
+      authorizations: [
+        {
+          mcpServerId: SERVER,
+          authenticationId: ACCOUNT,
+          authenticationRevision: 1,
+          credentialGeneration: 0,
+          status: "connected",
+          failureCode: null,
+          authorizationExpiresAt: null,
+          flowExpiresAt: null,
+          agentCount: 2,
+        },
+      ],
+    });
+    expect(h.servers.listAuthenticationViews).toHaveBeenCalledWith(ACCOUNT, AGENT);
+  });
+  it("tries server-selected reuse before issuing a new OAuth URL", async () => {
+    const h = build();
+    const result = await send(h.app, "POST", `${AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH}/connect`, {
+      payload: { scopes: ["read"] },
+    });
+    expect(result.response.statusCode).toBe(200);
+    expect(result.body).toEqual({ connected: true });
+    expect(h.authorization.connectOAuth).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER, ["read"]);
+    expect(h.flows.start).not.toHaveBeenCalled();
+  });
+  it("does not accept a client-selected credential source", async () => {
+    const h = build();
+    const result = await send(h.app, "POST", `${AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH}/connect`, {
+      payload: { credentialSourceId: ACCOUNT },
+    });
+    expect(result.response.statusCode).toBe(400);
+    expect(h.authorization.connectOAuth).not.toHaveBeenCalled();
+  });
+  it("passes the reviewed authentication identity and count when disconnecting a family", async () => {
+    const h = build();
+    const result = await send(h.app, "DELETE", `${AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH}/family`, {
+      payload: { authenticationId: ACCOUNT, agentCount: 2 },
+    });
+    expect(result.response.statusCode).toBe(204);
+    expect(h.servers.detachAuthorizationFamily).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER, ACCOUNT, 2);
+  });
+});
+
+it("cancels one reviewed shared flow without requiring another Agent's browser secret", async () => {
+  const h = build();
+  const result = await send(h.app, "DELETE", `${AGENT_MCP_AUTHORIZATION_TEMPLATE_PATH}/flow`, {
+    payload: { authenticationId: ACCOUNT, expectedRevision: 1 },
+  });
+  expect(result.status).toBe(204);
+  expect(h.authorization.cancelSharedFlow).toHaveBeenCalledWith(ACCOUNT, AGENT, SERVER, ACCOUNT, 1);
+});
+
+describe("reusable MCP installation lookup", () => {
+  it("returns only the selected safe definition without mounting or starting OAuth", async () => {
+    const h = build();
+    const input = { name: "docs", url: SERVER_DTO.url, defaultAuthKind: "oauth", scopes: ["read"] };
+    const result = await send(h.app, "POST", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}/reusable-installation`, {
+      payload: input,
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ server: SERVER_DTO });
+    expect(h.authorization.findReusableInstallation).toHaveBeenCalledWith(ACCOUNT, AGENT, input, ["read"]);
+    expect(h.servers.attachServer).not.toHaveBeenCalled();
+    expect(h.flows.start).not.toHaveBeenCalled();
+  });
+  it("rejects caller-selected source identities", async () => {
+    const h = build();
+    const result = await send(h.app, "POST", `${AGENT_MCP_SERVERS_TEMPLATE_PATH}/reusable-installation`, {
+      payload: { name: "docs", url: SERVER_DTO.url, credentialSourceId: ACCOUNT },
+    });
+    expect(result.status).toBe(400);
+    expect(h.authorization.findReusableInstallation).not.toHaveBeenCalled();
   });
 });

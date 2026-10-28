@@ -2,11 +2,12 @@ import type {
   ListAgentMCPServersResponse,
   ListAvailableMCPServersResponse,
   MCPAgentServer,
+  MCPAuthenticationView,
   MCPCatalogEndpointsResponse,
   MCPServer,
   MCPServerDetail,
 } from "@opentag/shared/browser";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { browserApi } from "../../api.js";
 import { queryKeys } from "../../query/keys.js";
 import { LIVE_REFETCH_INTERVAL_MS, liveResourceQueryOptions } from "../../query/live.js";
@@ -104,6 +105,63 @@ export function useAgentMcpServers(agentId: string) {
   });
 }
 
+const authenticationKey = (id: string) => ["mcp", "authentications", "root", id] as const;
+
+export function useMcpAuthentications(agentId: string) {
+  const cache = useQueryClient();
+  return useQuery({
+    ...liveResourceQueryOptions,
+    queryKey: ["mcp", "authentications", agentId],
+    queryFn: async () => {
+      const response = await browserApi.mcpAuthentications(agentId);
+      for (const view of response.authorizations) {
+        if (!view.authenticationId) continue;
+        cache.setQueryData<MCPAuthenticationView>(authenticationKey(view.authenticationId), (previous) =>
+          newerMcpAuthentication(previous, view),
+        );
+      }
+      return response;
+    },
+  });
+}
+
+export function useSharedMcpAuthentication(view: MCPAuthenticationView | undefined) {
+  const query = useQuery<MCPAuthenticationView>({
+    queryKey: authenticationKey(view?.authenticationId ?? "unconfigured"),
+    queryFn: skipToken,
+  });
+  return view?.authenticationId ? (query.data ?? view) : view;
+}
+
+export function useConnectMcpOAuth(agentId: string) {
+  const invalidate = useMcpInvalidation();
+  return useMutation({
+    mutationFn: (input: { mcpServerId: string; scopes?: readonly string[] }) =>
+      browserApi.connectMcpOAuth(agentId, input.mcpServerId, input.scopes),
+    onSuccess: () => {
+      void invalidate();
+    },
+  });
+}
+
+export function useCancelSharedMcpOAuth(agentId: string) {
+  const invalidate = useMcpInvalidation();
+  return useMutation({
+    mutationFn: (input: { mcpServerId: string; authenticationId: string; expectedRevision: number }) =>
+      browserApi.cancelSharedMcpOAuth(agentId, input.mcpServerId, input.authenticationId, input.expectedRevision),
+    onSettled: invalidate,
+  });
+}
+
+export function useDisconnectMcpFamily(agentId: string) {
+  const invalidate = useMcpInvalidation();
+  return useMutation({
+    mutationFn: (input: { mcpServerId: string; authenticationId: string; agentCount: number }) =>
+      browserApi.disconnectMcpFamily(agentId, input.mcpServerId, input.authenticationId, input.agentCount),
+    onSuccess: invalidate,
+  });
+}
+
 export function useAvailableMcpServers(agentId: string, enabled: boolean) {
   return useQuery({
     ...liveResourceQueryOptions,
@@ -119,11 +177,12 @@ export function useAvailableMcpServers(agentId: string, enabled: boolean) {
  * definition edit also invalidates every other Agent that uses it, which the pool invalidation and
  * the live cadence between them cover.
  */
-export function useMcpInvalidation(agentId?: string) {
+export function useMcpInvalidation(_agentId?: string) {
   const queryClient = useQueryClient();
   return async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: agentId ? queryKeys.mcp.agentServers(agentId) : ["mcp", "agents"] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp", "agents"] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp", "authentications"] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.mcp.servers() }),
       queryClient.invalidateQueries({ queryKey: queryKeys.mcp.serverRoot() }),
     ]);
@@ -260,4 +319,14 @@ function mergeAgentServer(
   const servers = previous?.servers ?? [];
   if (!servers.some((server) => server.mcpServerId === entry.mcpServerId)) return { servers: [...servers, entry] };
   return { servers: servers.map((server) => (server.mcpServerId === entry.mcpServerId ? entry : server)) };
+}
+
+export function newerMcpAuthentication(previous: MCPAuthenticationView | undefined, next: MCPAuthenticationView) {
+  if (!previous) return next;
+  const previousRevision = previous.authenticationRevision ?? 0;
+  const nextRevision = next.authenticationRevision ?? 0;
+  if (previousRevision > nextRevision) return previous;
+  if (previousRevision === nextRevision && (previous.credentialGeneration ?? 0) > (next.credentialGeneration ?? 0))
+    return previous;
+  return next;
 }

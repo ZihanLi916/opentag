@@ -4,8 +4,8 @@
  * Two scopes, and the URL says which: Server definitions and the aggregate view live on the Account
  * pool (`/api/v1/mcp-servers`), while every mount, override, authorization, and probe is addressed
  * under the Agent that owns it (`/api/v1/agents/:agentId/mcp-servers/...`). That is not decoration:
- * authorization is strictly per Agent, so a Server-scoped authorization route would have no way to
- * say whose credential it was writing.
+ * each Agent must explicitly connect even when its mount references a shared OAuth authentication.
+ * A Server-scoped authorization route would not identify that relationship.
  *
  * Every route requires an authenticated Account through the shared user-auth preHandler. Responses
  * are the shared safe DTOs only: no bearer key, no ciphertext or key ID, no OAuth state or PKCE
@@ -20,9 +20,13 @@ import {
   AGENT_MCP_SERVERS_TEMPLATE,
   AttachMCPServerRequestSchema,
   CancelMCPOAuthRequestSchema,
+  CancelSharedMCPOAuthRequestSchema,
+  ConnectMCPOAuthResponseSchema,
   CreateMCPServerRequestSchema,
+  FindReusableMCPInstallationRequestSchema,
   ListAgentMCPServersResponseSchema,
   ListAvailableMCPServersResponseSchema,
+  ListMCPAuthenticationViewsResponseSchema,
   ListMCPServersResponseSchema,
   MCP_CATALOG_ENDPOINTS_PATH,
   MCP_OAUTH_CALLBACK_PATH,
@@ -32,6 +36,7 @@ import {
   MCPProbeResponseSchema,
   MCPServerDetailSchema,
   MCPServerSchema,
+  ReusableMCPInstallationResponseSchema,
   SetMCPAuthorizationRequestSchema,
   StartMCPOAuthRequestSchema,
   StartMCPOAuthResponseSchema,
@@ -136,6 +141,18 @@ export function registerMcpServerRoutes(
     return reply.header("Cache-Control", "no-store").code(200).send(response);
   });
 
+  app.post(`${AGENT_MCP_SERVERS_TEMPLATE}/reusable-installation`, { preHandler }, async (request, reply) => {
+    const { agentId } = parseRequest(AgentParamsSchema, request.params);
+    const input = parseRequest(FindReusableMCPInstallationRequestSchema, request.body);
+    const server = await authorization.findReusableInstallation(
+      authenticatedUserId(request),
+      agentId,
+      input,
+      input.scopes,
+    );
+    return reply.header("Cache-Control", "no-store").send(ReusableMCPInstallationResponseSchema.parse({ server }));
+  });
+
   app.post(AGENT_MCP_SERVERS_TEMPLATE, { preHandler }, async (request, reply) => {
     const { agentId } = parseRequest(AgentParamsSchema, request.params);
     const input = parseRequest(AttachMCPServerRequestSchema, request.body);
@@ -184,6 +201,60 @@ export function registerMcpServerRoutes(
         request.log.warn({ agentId, mcpServerId }, "MCP tools could not be refreshed after cancelling reauthorization");
       });
     return reply.code(200).send(current);
+  });
+
+  app.get(`${AGENT_MCP_SERVERS_TEMPLATE}/authentications`, { preHandler }, async (request, reply) => {
+    const { agentId } = parseRequest(AgentParamsSchema, request.params);
+    return reply.header("Cache-Control", "no-store").send(
+      ListMCPAuthenticationViewsResponseSchema.parse({
+        authorizations: await servers.listAuthenticationViews(authenticatedUserId(request), agentId),
+      }),
+    );
+  });
+
+  app.delete(`${AGENT_MCP_AUTHORIZATION_TEMPLATE}/flow`, { preHandler }, async (request, reply) => {
+    const { agentId, mcpServerId } = parseRequest(AgentServerParamsSchema, request.params);
+    const input = parseRequest(CancelSharedMCPOAuthRequestSchema, request.body);
+    await authorization.cancelSharedFlow(
+      authenticatedUserId(request),
+      agentId,
+      mcpServerId,
+      input.authenticationId,
+      input.expectedRevision,
+    );
+    return reply.code(204).send();
+  });
+
+  app.delete(`${AGENT_MCP_AUTHORIZATION_TEMPLATE}/family`, { preHandler }, async (request, reply) => {
+    const { agentId, mcpServerId } = parseRequest(AgentServerParamsSchema, request.params);
+    const input = parseRequest(
+      z.object({ authenticationId: z.string().uuid(), agentCount: z.number().int().min(1) }).strict(),
+      request.body,
+    );
+    await servers.detachAuthorizationFamily(
+      authenticatedUserId(request),
+      agentId,
+      mcpServerId,
+      input.authenticationId,
+      input.agentCount,
+    );
+    return reply.code(204).send();
+  });
+
+  app.post(`${AGENT_MCP_AUTHORIZATION_TEMPLATE}/connect`, { preHandler }, async (request, reply) => {
+    const { agentId, mcpServerId } = parseRequest(AgentServerParamsSchema, request.params);
+    const input = parseRequest(StartMCPOAuthRequestSchema, request.body ?? {});
+    const connected = await authorization.connectOAuth(
+      authenticatedUserId(request),
+      agentId,
+      mcpServerId,
+      input.scopes ?? [],
+    );
+    if (connected)
+      void authorization.probe(authenticatedUserId(request), agentId, mcpServerId).catch(() => {
+        request.log.warn({ agentId, mcpServerId }, "MCP tools could not be refreshed after connecting authorization");
+      });
+    return reply.send(ConnectMCPOAuthResponseSchema.parse({ connected }));
   });
 
   app.post(AGENT_MCP_AUTHORIZATION_OAUTH_TEMPLATE, { preHandler }, async (request, reply) => {
