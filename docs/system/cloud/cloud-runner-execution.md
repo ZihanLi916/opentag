@@ -191,6 +191,52 @@ Assistant history preserves Pi's `reasoning_content`, `reasoning`, and `reasonin
 plus bounded encrypted `reasoning_details` for signed tool calls. These history fields do not
 relax the top-level routing or credential allowlist.
 
+### Model retry ownership
+
+The model proxy is the sole automatic retry owner for each managed Cloud model call, including
+compaction summaries. It retries only a confirmed HTTP 429 rate-limit rejection, at most three
+times after the initial attempt. Pi session, summarization and provider retries are explicitly
+zero; the underlying OpenAI SDK also performs no retries. The Router, LiteLLM Router and
+provider SDK configuration must keep retries at zero so forwarding never multiplies the budget.
+
+New managed Pi settings disable all retry loops and the generated provider sends
+`x-opentag-model-retry-owner: proxy`. Only requests declaring that ownership receive proxy
+retries. Requests from older Runners are forwarded once, preserving their retry boundary during
+rolling upgrades. An older proxy ignores the declaration and forwards once; a new Runner does
+not compensate with a second retry owner.
+
+A confirmed rate-limit response preserves a validated `Retry-After` hint. Integer seconds are
+accepted and canonical HTTP-dates are rounded up to seconds. Arbitrary upstream headers and
+error text remain hidden; permanent quota errors expose no hint. A requested wait above 60
+seconds terminates the call instead of retrying early. Without a usable hint, the proxy uses
+jittered exponential delays based on 500 ms, 1 second and 2 seconds. One request timeout covers
+all attempts and waits. Cancellation, grant revocation and the existing absolute Turn deadline
+interrupt the work; a retry never extends permission lifetime or resets its deadline.
+
+HTTP 408/409/5xx, statusless transport failures, unusable successful responses and uncertain
+stream errors are not automatically replayed. This includes a lost Pi-to-proxy connection and a
+lost Router response after dispatch. The conservative policy also leaves provably undispatched
+503 responses terminal. A missing response is not evidence that the model did not execute.
+Each confirmed rejected attempt keeps the existing model-service usage settlement; accounting
+and idempotency semantics are unchanged.
+
+Compaction remains enabled. Native context-overflow recovery can compact history and make one
+bounded recovery with changed context; partial tool calls from a failed response are not
+executed. This differs from replaying an identical failed call. No model failure triggers a
+whole-Turn, delivery or scheduled-occurrence replay. `CLOUD_MODEL_RATE_LIMIT` records the attempt,
+planned wait and ownership declaration without logging upstream content or credentials.
+
+The Router can report a definite pre-output Provider rate limit inside HTTP 200 SSE. The model
+proxy inspects at most 8 KiB before the first complete data event, including heartbeat comments,
+and normalizes an initial `rate_limit_exceeded` envelope only when the Router sets
+`error.pre_stream_rejection` to boolean `true`. The Router emits that marker only after observing
+an upstream HTTP 429 rejection; it does not imply a ledger release committed. A validated string
+`error.retry_after` supplies the wait hint. The same proxy retry budget covers this shape.
+Unmarked or uncertain complete errors, events after model data and prefixes exceeding the cap
+retain their original stream behavior without replay. An accepted stream that fails, times out
+or reaches clean EOF before its first complete data event returns terminal HTTP 400
+`CLOUD_MODEL_UPSTREAM_UNCERTAIN`. Explicit permission revocation and shutdown return HTTP 401.
+
 The grant registry's 4,096-entry bound protects Server state, including concurrent issuance. It
 is not a per-Account execution quota or a model-spend budget. Account-level admission and fairness
 remain resource-policy follow-ups; the current global limit can be consumed by one Account.
