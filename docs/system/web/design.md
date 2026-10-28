@@ -109,6 +109,8 @@ actual delivery still requires sending a message and confirming the Bot's reply.
 No outbound-message test endpoint or reply acknowledgement is added by this UI.
 Slack configuration reads combine query-lifecycle and deadline cancellation and
 forward it to fetch, so expired reads and reads with no remaining observers abort.
+The shared deadline helper links abort events and cleans up listeners when settled;
+it does not require newer signal-composition APIs than the build browser baseline.
 The last-good view and foreground readiness polling remain available; cancellation
 does not introduce automatic authorization writes.
 

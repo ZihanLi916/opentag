@@ -97,9 +97,7 @@ function SlackCustomAppFlow({
   const configuration = useQuery({
     queryKey: ["slack-configuration", agentId, bindingId],
     queryFn: ({ signal: querySignal }) =>
-      withDeadline(AGENT_SETUP_READ_TIMEOUT_MS, (deadlineSignal) =>
-        api.slackConfiguration(agentId, AbortSignal.any([querySignal, deadlineSignal])),
-      ),
+      withDeadline(AGENT_SETUP_READ_TIMEOUT_MS, (signal) => api.slackConfiguration(agentId, signal), querySignal),
     // A new binding key must not remove the open post-save verification dialog.
     placeholderData: (previous) => previous,
     retry: false,
@@ -843,7 +841,9 @@ function SlackAppStatus({
       {!verified ? (
         <p className="text-sm">{verifyUrl ? m.im_slack_verify_instructions() : m.im_slack_auto_saved()}</p>
       ) : null}
-      {slackSetupReady(view) ? <p className="text-sm">{m.im_slack_delivery_check()}</p> : null}
+      {slackSetupReady(view) ? (
+        <p className="text-sm">{m.im_slack_delivery_check({ provider: messagingProviderLabel("slack") })}</p>
+      ) : null}
       {verified && !slackSetupReady(view) ? (
         <>
           <p role="status">

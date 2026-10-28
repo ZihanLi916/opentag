@@ -133,7 +133,7 @@
   "im_slack_create_recovery": "创建卡住时，先在 Your Apps 查看。已有 App 就进入 OAuth & Permissions → Install to workspace 完成安装；{provider} 提示操作过快时，稍后重试，避免重复创建。",
   "im_slack_credentials_unavailable": "无法恢复已保存的凭证。请断开后重新连接此 App，历史会保留。",
   "im_slack_current_app": "当前应用",
-  "im_slack_delivery_check": "在 Slack 中打开 Bot 私聊，发送“你好”并确认收到回复。",
+  "im_slack_delivery_check": "在 {provider} 中打开 Bot 私聊，发送“你好”并确认收到回复。",
   "im_slack_diagnostics": "诊断",
   "im_slack_existing_app_help": "帮助",
   "im_slack_existing_app_instructions": "若原 App 尚未配置下方地址和事件，请在 {provider} 中补齐并保留其他设置。权限变化后需重新安装，再更新 Token。",

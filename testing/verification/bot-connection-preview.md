@@ -420,3 +420,45 @@ Normal Web and production-component preview builds passed with the existing
 chunk-size warning. No new UI screenshot is needed for this transport-only fix;
 prior visual evidence remains applicable. Full CI and live provider acceptance
 still require maintainer/environment access.
+
+## Browser-baseline compatibility and CI naming correction (2026-10-28)
+
+The review of `a7745cdc` confirmed transport cancellation but found that the
+new `AbortSignal.any` call exceeded the existing browser baseline. Keep the
+baseline and use the shared deadline controller with an optional observer signal.
+Abort events link the two lifecycles; success, failure, cancellation and timeout
+clean up the timer and listener. An already-cancelled observer cannot start a read.
+No provider write path, polling policy, dependency or visual design changes.
+
+The cancellation regressions now remove `AbortSignal.any` during the tests and
+restore its original descriptor afterwards. Before the fix, both regressions
+failed (the entry could not load and no fetch started). After the fix, three
+consecutive expired polls remain bounded to one pending GET, preserve the
+last-good view, recover to ready, and stop polling. Unmount still aborts fetch.
+Six helper regressions also cover observer cancellation before and during a read,
+non-cooperating transports, late transport rejection, and cleanup on settlement.
+These are production-component/API tests with an injected transport, not tests
+in an actual legacy browser or against live Slack/Feishu services.
+
+CI run `40654751254` (Node 24 shard 1) and Web coverage run `40654751068`
+both failed the brand-naming catalogue guard: the new delivery instruction spelled
+out the provider in English and Chinese. Both UI call sites now pass the existing
+provider-label helper into the localized message. The naming guard is unchanged;
+English and Chinese output assertions preserve the exact visible instruction.
+
+Validation after the correction:
+
+- Full Web coverage run: **181 files / 2,302 tests passed**, zero retries/flaky tests;
+  line coverage **94.62% (8,754/9,251)**. No tests or coverage thresholds were relaxed.
+- Changed-line coverage against `bd415ef21`, including this working-tree correction:
+  **804/836 executable lines (96.17%)**, above the repository's 80% threshold.
+- Web typecheck, normal production build, isolated production-component preview
+  build, repository `pnpm check`, and `git diff --check` passed. Both bundles contain
+  no `AbortSignal.any` call. Existing chunk-size warnings remain.
+- Browser smoke on the newly built preview: Slack opens, the demonstration code
+  saves into verification-pending, and the simulated ready response retains the
+  explicit manual message/reply instruction. No browser console errors observed.
+  This confirms UI integration only, not real authorization or delivery.
+
+Fresh GitHub CI and automated ownership reviews must still validate the pushed
+commit. No live service or real legacy-browser acceptance is claimed.

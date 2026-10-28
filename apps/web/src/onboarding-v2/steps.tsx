@@ -406,7 +406,7 @@ function doneDescription(name: string, provider?: ImProvider): string {
 }
 
 function deliveryCheckDescription(provider: ImProvider | undefined, fallback: string): string {
-  if (provider === "slack") return m.im_slack_delivery_check();
+  if (provider === "slack") return m.im_slack_delivery_check({ provider: messagingProviderLabel("slack") });
   if (provider === "feishu")
     return m.onboarding_v2_connection_feishu_test({ provider: messagingProviderLabel("feishu") });
   return fallback;

@@ -2,7 +2,7 @@ import type { SlackConfigurationView } from "@opentag/shared/browser";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_SETUP_READ_TIMEOUT_MS, ApiError, BrowserApi, browserApi } from "../api.js";
 import { SlackCustomApp } from "./slack-custom-app.js";
 
@@ -495,52 +495,63 @@ function cancellableConfigurationTransport(initial?: SlackConfigurationView) {
   };
 }
 
-it("aborts expired configuration GETs without overlapping polls, retains the view, and recovers without writes", async () => {
-  const transport = cancellableConfigurationTransport(bound());
-  fixture(bound(), { api: transport.api, presentation: "inline" });
-  const entry = await screen.findByRole("button", { name: "Continue" });
-  vi.useFakeTimers();
-  fireEvent.click(entry);
-  await act(() => vi.advanceTimersByTimeAsync(2_001));
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    expect(transport.signals).toHaveLength(attempt + 1);
-    expect(transport.pending.size).toBe(1);
-    await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS));
-    expect(transport.signals[attempt]?.aborted).toBe(true);
-    expect(transport.pending.size).toBe(0);
-    expect(screen.getByText("Authorization saved · verification pending")).toBeTruthy();
-    expect(screen.getByText("Couldn’t read connection status. Try again.")).toBeTruthy();
-    if (attempt < 2) await act(() => vi.advanceTimersByTimeAsync(2_001));
-  }
-  transport.recover({
-    ...bound(),
-    identityClosure: { status: "verified", verifiedAt: "2026-10-12T00:02:00.000Z" },
-    handoff: { bindingState: "active", handoffReady: true },
+describe("configuration reads without AbortSignal.any", () => {
+  const anyDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  beforeEach(() => {
+    Object.defineProperty(AbortSignal, "any", { configurable: true, value: undefined });
   });
-  await act(() => vi.advanceTimersByTimeAsync(2_001));
-  expect(screen.getByText("Slack connected.")).toBeTruthy();
-  expect(screen.queryByText("Couldn’t read connection status. Try again.")).toBeNull();
-  expect(transport.peakPending()).toBe(1);
-  const reads = transport.fetchImpl.mock.calls.length;
-  await act(() => vi.advanceTimersByTimeAsync(6_000));
-  expect(transport.fetchImpl).toHaveBeenCalledTimes(reads);
-  for (const [url, init] of transport.fetchImpl.mock.calls) {
-    expect(String(url)).toBe(`/api/v1/agents/${agentId}/im-binding/slack/configuration`);
-    expect(init?.method ?? "GET").toBe("GET");
-  }
-});
+  afterEach(() => {
+    if (anyDescriptor) Object.defineProperty(AbortSignal, "any", anyDescriptor);
+    else Reflect.deleteProperty(AbortSignal, "any");
+  });
 
-it("aborts an in-flight configuration GET on unmount before its deadline", async () => {
-  vi.useFakeTimers();
-  const transport = cancellableConfigurationTransport();
-  const test = fixture(unbound(), { api: transport.api, presentation: "inline" });
-  await act(() => vi.advanceTimersByTimeAsync(0));
-  expect(transport.signals).toHaveLength(1);
-  expect(transport.pending.size).toBe(1);
-  test.unmount();
-  await act(() => vi.advanceTimersByTimeAsync(0));
-  expect(transport.signals[0]?.aborted).toBe(true);
-  expect(transport.pending.size).toBe(0);
-  await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS + 2_001));
-  expect(transport.fetchImpl).toHaveBeenCalledOnce();
+  it("aborts expired configuration GETs without overlapping polls, retains the view, and recovers without writes", async () => {
+    const transport = cancellableConfigurationTransport(bound());
+    fixture(bound(), { api: transport.api, presentation: "inline" });
+    const entry = await screen.findByRole("button", { name: "Continue" });
+    vi.useFakeTimers();
+    fireEvent.click(entry);
+    await act(() => vi.advanceTimersByTimeAsync(2_001));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(transport.signals).toHaveLength(attempt + 1);
+      expect(transport.pending.size).toBe(1);
+      await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS));
+      expect(transport.signals[attempt]?.aborted).toBe(true);
+      expect(transport.pending.size).toBe(0);
+      expect(screen.getByText("Authorization saved · verification pending")).toBeTruthy();
+      expect(screen.getByText("Couldn’t read connection status. Try again.")).toBeTruthy();
+      if (attempt < 2) await act(() => vi.advanceTimersByTimeAsync(2_001));
+    }
+    transport.recover({
+      ...bound(),
+      identityClosure: { status: "verified", verifiedAt: "2026-10-12T00:02:00.000Z" },
+      handoff: { bindingState: "active", handoffReady: true },
+    });
+    await act(() => vi.advanceTimersByTimeAsync(2_001));
+    expect(screen.getByText("Slack connected.")).toBeTruthy();
+    expect(screen.queryByText("Couldn’t read connection status. Try again.")).toBeNull();
+    expect(transport.peakPending()).toBe(1);
+    const reads = transport.fetchImpl.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(6_000));
+    expect(transport.fetchImpl).toHaveBeenCalledTimes(reads);
+    for (const [url, init] of transport.fetchImpl.mock.calls) {
+      expect(String(url)).toBe(`/api/v1/agents/${agentId}/im-binding/slack/configuration`);
+      expect(init?.method ?? "GET").toBe("GET");
+    }
+  });
+
+  it("aborts an in-flight configuration GET on unmount before its deadline", async () => {
+    vi.useFakeTimers();
+    const transport = cancellableConfigurationTransport();
+    const test = fixture(unbound(), { api: transport.api, presentation: "inline" });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(transport.signals).toHaveLength(1);
+    expect(transport.pending.size).toBe(1);
+    test.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(transport.signals[0]?.aborted).toBe(true);
+    expect(transport.pending.size).toBe(0);
+    await act(() => vi.advanceTimersByTimeAsync(AGENT_SETUP_READ_TIMEOUT_MS + 2_001));
+    expect(transport.fetchImpl).toHaveBeenCalledOnce();
+  });
 });
