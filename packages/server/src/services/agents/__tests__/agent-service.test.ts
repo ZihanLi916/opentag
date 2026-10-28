@@ -807,20 +807,21 @@ describe("AgentService", () => {
     }
   });
 
-  it("allocates one runtime revision for a combined opt-in and Soul change and rejects stale retries", async () => {
+  it("allocates one runtime revision for a combined self-configuration and Soul change and rejects stale retries", async () => {
     const { bootstrap, computer, service } = await fixture();
     const agent = await createAgent(service, bootstrap.userId, computer.id);
+    expect(agent.selfConfigurationEnabled).toBe(true);
     const updated = await service.updateById(bootstrap.userId, agent.id, {
       expectedRevision: agent.revision,
-      selfConfigurationEnabled: true,
+      selfConfigurationEnabled: false,
       runtimeConfig: { instructions: "Updated Soul" },
     });
     expect(updated.runtimeConfig.revision).toBe(agent.runtimeConfig.revision + 1);
-    expect(updated).toMatchObject({ selfConfigurationEnabled: true, runtimeConfig: { instructions: "Updated Soul" } });
+    expect(updated).toMatchObject({ selfConfigurationEnabled: false, runtimeConfig: { instructions: "Updated Soul" } });
     await expect(
       service.updateById(bootstrap.userId, agent.id, {
         expectedRevision: agent.revision,
-        selfConfigurationEnabled: false,
+        selfConfigurationEnabled: true,
       }),
     ).rejects.toMatchObject({ code: "AGENT_REVISION_CONFLICT" });
     expect(await service.getConfigById(bootstrap.userId, agent.id)).toEqual(updated);
