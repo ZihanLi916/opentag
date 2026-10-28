@@ -425,9 +425,9 @@ describe("AgentSetupPage stages", () => {
     const continueButton = screen.getByRole("button", { name: "Continue" });
     continueButton.focus();
     fireEvent.click(continueButton);
-    const messagingHeading = screen.getByRole("heading", { name: "Set up Reviewer" });
+    const messagingHeading = screen.getByRole("heading", { name: "Connect your messaging app", level: 1 });
     expect(document.activeElement).toBe(messagingHeading);
-    expect(screen.getByRole("heading", { name: "Connect your messaging app" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Set up Reviewer" })).toBeNull();
     expect(screen.getByRole("button", { name: /Lark/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Slack/ })).toBeTruthy();
     // Slack leads here for the same reason it leads in Messaging settings: neither channel is the
@@ -549,7 +549,7 @@ describe("AgentSetupPage stages", () => {
     renderSetup(memory.adapter);
     await settle(10);
 
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
     const qr = screen.getByAltText("Scan this QR code in Lark");
     expect(qr.parentElement?.getAttribute("data-ui")).toBe("setup-qr");
     expect(qr.classList.contains("ots-qr__image")).toBe(true);
@@ -590,7 +590,7 @@ describe("AgentSetupPage stages", () => {
     renderSetup(memory.adapter);
     await settle();
 
-    expect(screen.getByText("Connected. Checking your agent can be reached…")).toBeTruthy();
+    expect(screen.getByText("Authorization saved. Checking whether the Agent is ready…")).toBeTruthy();
   });
 
   it("renders a blocked binding with its identity and recovery actions, and no direct switch", async () => {
@@ -619,6 +619,37 @@ describe("AgentSetupPage stages", () => {
     expect(document.querySelector('[data-ui="agent-setup-messaging-choices"]')).toBeNull();
   });
 
+  it.each([
+    ["feishu", "FEISHU_SETUP_EXPIRED", "This QR code expired. Generate a new one and try again."],
+    ["feishu", "FEISHU_UPSTREAM_UNAVAILABLE", "Lark is unavailable right now. Check the connection and try again."],
+    ["slack", "SLACK_SCOPE_REAUTH_REQUIRED", "Slack permissions are incomplete. Update permissions and try again."],
+    [
+      "feishu",
+      "UNRECOGNIZED_PROVIDER_FAILURE",
+      "The server did not provide a specific cause. Retry the connection; if this persists, ask an administrator to investigate.",
+    ],
+  ] as const)("shows the reported %s cause %s before a generic failure", async (provider, errorCode, message) => {
+    const memory = createMemorySetupAdapter({
+      agent: setupAgent(),
+      messaging: { kind: "bound", provider, reachable: true, attention: "provider-error" },
+    });
+    const adapter: AgentSetupAdapter = {
+      ...memory.adapter,
+      readSnapshot: async (id) => {
+        const snapshot = await memory.adapter.readSnapshot(id);
+        if (snapshot.messaging.kind !== "blocked") throw new Error("Expected blocked fixture");
+        return { ...snapshot, messaging: { ...snapshot.messaging, errorCode } };
+      },
+    };
+    renderSetup(adapter);
+    await settle();
+    expect(screen.getByRole("alert").textContent).toContain(message);
+    expect(screen.getByText("Next step")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Error details" }));
+    await settle();
+    expect(screen.getByText(`Error code: ${errorCode}`)).toBeTruthy();
+  });
+
   it("reports readiness once the snapshot's stage is ready", async () => {
     const onReady = vi.fn();
     const memory = createMemorySetupAdapter({
@@ -630,7 +661,11 @@ describe("AgentSetupPage stages", () => {
 
     expect(screen.getByRole("heading", { name: "reviewer is ready." })).toBeTruthy();
     // Provider identity reaches the done screen from the snapshot, not from page state.
-    expect(screen.getByText("Message this Bot in Slack to put it to work.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Connection checks passed. Send “Hello” in the Bot’s chat and confirm its reply to verify actual message delivery.",
+      ),
+    ).toBeTruthy();
     expect(onReady).toHaveBeenCalledWith(SETUP_AGENT_ID);
     expect(onReady).toHaveBeenCalledTimes(1);
   });
@@ -782,7 +817,7 @@ describe("preparation review regressions", () => {
 
     expect(
       screen.getByText(
-        "In Slack, add this Bot to a channel and send it a message, or message it directly, to finish the connection check.",
+        "Open the Bot’s DM in Slack and send “Hello”, or add it to a channel and @mention it. Confirm its reply to verify actual message delivery.",
       ),
     ).toBeTruthy();
   });
@@ -981,11 +1016,11 @@ describe("AgentSetupPage transitions", () => {
     continueFromPreparation();
     fireEvent.click(screen.getByRole("button", { name: /Lark/ }));
     await settle(10);
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
 
     memory.controls.scanFeishuCode();
     await advance(POLL_MS + 10);
-    expect(screen.getByText("Connected. Checking your agent can be reached…")).toBeTruthy();
+    expect(screen.getByText("Authorization saved. Checking whether the Agent is ready…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disconnect Lark" })).toBeTruthy();
 
     memory.controls.completeHandoff();
@@ -1010,12 +1045,16 @@ describe("AgentSetupPage transitions", () => {
     await settle();
 
     expect(cancel).toHaveBeenCalledWith(attemptId);
-    expect(screen.getByText("Couldn’t connect Lark. Try scanning a new QR code.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The server did not provide a specific cause. Retry the connection; if this persists, ask an administrator to investigate.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disconnect Lark" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Your Slack workspace/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry Lark setup" }));
     await settle();
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
     const retried = await memory.adapter.readSnapshot(SETUP_AGENT_ID);
     expect(retried.messaging.kind).toBe("authorizing");
     if (retried.messaging.kind === "authorizing" && retried.messaging.provider === "feishu") {
@@ -1033,10 +1072,15 @@ describe("AgentSetupPage transitions", () => {
     await settle();
     fireEvent.click(messagingChoice(/Slack/));
     await settle();
-    expect(screen.getByRole("dialog", { name: "Connect Slack" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Connect Slack" })).toBeTruthy();
     expect(screen.getByLabelText("Code")).toBeTruthy();
     expect(oauth).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Connect Slack" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close Connect Slack" }));
+    await settle();
+    expect(screen.queryByRole("region", { name: "Connect Slack" })).toBeNull();
+    expect(document.activeElement).toBe(messagingChoice(/Slack/));
   });
 
   it("reauthorizes the current Slack binding rather than starting fresh", async () => {
@@ -1091,7 +1135,7 @@ describe("AgentSetupPage transitions", () => {
       bindingId: expect.any(String),
       credentialGeneration: 1,
     });
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
   });
 
   it("moves across Providers only through an explicit unbind, then offers the fresh choice", async () => {
@@ -1204,7 +1248,7 @@ describe("AgentSetupPage transitions", () => {
     expect(adapter.startSlackInstall).not.toHaveBeenCalled();
     gate.resolve();
     await settle(10);
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
   });
 
   it("checks again on demand and shows the new state", async () => {
@@ -1492,7 +1536,7 @@ describe("AgentSetupPage preparation rows across stages", () => {
     // An unselected Provider's later reports must never regress started Messaging: the rows leave
     // the page and only the Messaging surface remains.
     expect(document.querySelector('[data-ui="readiness-list"]')).toBeNull();
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
   });
 });
 
@@ -2189,7 +2233,7 @@ describe("AgentSetupPage request fencing", () => {
     });
     renderSetup(memory.adapter);
     await settle(10);
-    expect(screen.getByText("Waiting for you to scan…")).toBeTruthy();
+    expect(screen.getByText("Waiting for scan and authorization…")).toBeTruthy();
 
     // The poll starts, and while it is in flight the reader cancels: the cancel's own re-read wins.
     await advance(POLL_MS + 10);
@@ -2202,7 +2246,7 @@ describe("AgentSetupPage request fencing", () => {
     stale.resolve(await modelRead(SETUP_AGENT_ID));
     await settle();
     expect(screen.getByRole("button", { name: "Retry Lark setup" })).toBeTruthy();
-    expect(screen.queryByText("Waiting for you to scan…")).toBeNull();
+    expect(screen.queryByText("Waiting for scan and authorization…")).toBeNull();
   });
 
   it("waits for a slow poll before scheduling the next one", async () => {
@@ -2349,7 +2393,7 @@ describe("AgentSetupSurface integration seam", () => {
 });
 
 describe("AgentSetupPage manual Slack verification", () => {
-  it.each(["local", "cloud"] as const)("keeps verification open after saving on %s", async (kind) => {
+  it.each(["local", "cloud"] as const)("keeps inline verification open after saving on %s", async (kind) => {
     const memory = createMemorySetupAdapter({
       agent: setupAgent(),
       ...(kind === "cloud" ? { cloudService: { available: true } } : {}),
@@ -2385,10 +2429,10 @@ describe("AgentSetupPage manual Slack verification", () => {
     await settle(20);
     expect(save).toHaveBeenCalledTimes(1);
     expect((await memory.adapter.readSnapshot(SETUP_AGENT_ID)).messaging.kind).toBe("waiting-handoff");
-    const dialog = screen.getByRole("dialog", { name: "Connect Slack" });
+    const dialog = screen.getByRole("region", { name: "Connect Slack" });
     expect(
       within(dialog).getByText(
-        "In Event Subscriptions, confirm Verified and select Save Changes, then send a message.",
+        "In Event Subscriptions, confirm Verified and select Save Changes. Then open the Bot’s chat, send “Hello” and check for a reply.",
       ),
     ).toBeTruthy();
     expect(within(dialog).getByRole("link", { name: "Open settings" })).toHaveProperty(
@@ -2397,5 +2441,44 @@ describe("AgentSetupPage manual Slack verification", () => {
     );
     expect(within(dialog).queryByLabelText("Bot Token")).toBeNull();
     expect(within(dialog).queryByLabelText("Signing Secret")).toBeNull();
+  });
+});
+
+describe("messaging authorization lifetime", () => {
+  it("hides an expired QR while retaining the authoritative attempt and never auto-starting a replacement", async () => {
+    const memory = createMemorySetupAdapter({ agent: setupAgent() });
+    await memory.adapter.startFeishuAttempt(SETUP_AGENT_ID, "create", { kind: "unbound" });
+    const initial = await memory.adapter.readSnapshot(SETUP_AGENT_ID);
+    if (initial.messaging.kind !== "authorizing" || initial.messaging.provider !== "feishu")
+      throw new Error("Expected Feishu attempt");
+    const snapshot = {
+      ...initial,
+      messaging: { ...initial.messaging, expiresAt: new Date(Date.now() + 1_000).toISOString() },
+    };
+    const adapter = scriptedAdapter(async () => snapshot);
+    renderSetup(adapter);
+    await settle();
+    expect(document.querySelector('[data-ui="setup-qr"]')).not.toBeNull();
+    await advance(1_001);
+    expect(document.querySelector('[data-ui="setup-qr"]')).toBeNull();
+    expect(screen.getByText(/validity period has ended/)).toBeTruthy();
+    expect(adapter.startFeishuAttempt).not.toHaveBeenCalled();
+    expect(adapter.cancelFeishuAttempt).not.toHaveBeenCalled();
+    expect(screen.queryByText(/is ready\./)).toBeNull();
+  });
+
+  it("keeps a stale messaging snapshot visible and explains a timed-out observation", async () => {
+    const memory = createMemorySetupAdapter({ agent: setupAgent() });
+    await memory.adapter.startFeishuAttempt(SETUP_AGENT_ID, "create", { kind: "unbound" });
+    const snapshot = await memory.adapter.readSnapshot(SETUP_AGENT_ID);
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot)
+      .mockImplementation(() => new Promise(() => {}));
+    renderSetup(scriptedAdapter(read));
+    await settle();
+    await advance(SETUP_POLL_MS + AGENT_SETUP_READ_TIMEOUT_MS + 1);
+    expect(screen.getByRole("alert").textContent).toContain("last known state");
+    expect(document.querySelector('[data-ui="agent-setup-messaging"]')?.getAttribute("data-state")).toBe("authorizing");
   });
 });

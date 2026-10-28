@@ -253,7 +253,11 @@ describe("custom Slack App flow", () => {
     expect(screen.queryByLabelText("Signing Secret")).toBeNull();
     fireEvent.change(screen.getByLabelText("Bot Token"), { target: { value: "private-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Send a message to verify.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Authorization saved. Open the Bot’s chat and send “Hello”. Confirm its reply to verify actual message delivery.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open chat" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Open settings" })).toBeNull();
     expect(screen.queryByText("Slack connected.")).toBeNull();
@@ -272,7 +276,11 @@ describe("custom Slack App flow", () => {
     view.binding.lastRuntimeObservationAt = "2026-10-12T00:01:00.000Z";
     const test = fixture(view);
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-    expect(await screen.findByText("Send a message to verify.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Authorization saved. Open the Bot’s chat and send “Hello”. Confirm its reply to verify actual message delivery.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open chat" })).toBeTruthy();
     const verified = {
       ...view,
@@ -282,6 +290,8 @@ describe("custom Slack App flow", () => {
     await test.client.invalidateQueries();
     expect(await screen.findByText("Check Agent status to finish setup.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "View status" })).toBeTruthy();
+    expect(screen.queryByText("Slack connected.")).toBeNull();
+    expect(screen.getByText("App identity verified. Waiting for the Agent to be ready.")).toBeTruthy();
     test.read.mockResolvedValue({ ...verified, handoff: { bindingState: "active", handoffReady: true } });
     await test.client.invalidateQueries();
     expect(await screen.findByText("Slack connected.")).toBeTruthy();
@@ -391,4 +401,28 @@ it("uses existing-App credentials after uncertain creation without offering anot
   expect(screen.queryByRole("link", { name: "Create App" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   expect(browserApi.autoSetupSlack).toHaveBeenCalledTimes(1);
+});
+
+it("continues observing when handoff is ready but the App identity is still pending", async () => {
+  const test = fixture({ ...bound(), handoff: { bindingState: "active", handoffReady: true } });
+  const entry = await screen.findByRole("button", { name: "Continue" });
+  vi.useFakeTimers();
+  fireEvent.click(entry);
+  expect(screen.queryByText("Slack connected.")).toBeNull();
+  const calls = test.read.mock.calls.length;
+  await act(() => vi.advanceTimersByTimeAsync(2_100));
+  expect(test.read.mock.calls.length).toBeGreaterThan(calls);
+  expect(screen.queryByText("Slack connected.")).toBeNull();
+});
+
+it("surfaces a hung configuration read and offers a fresh read without writing credentials", async () => {
+  const test = fixture();
+  await screen.findByRole("button", { name: "Connect Slack" });
+  vi.useFakeTimers();
+  test.read.mockImplementation(() => new Promise(() => {}));
+  void test.client.invalidateQueries();
+  await act(() => vi.advanceTimersByTimeAsync(10_001));
+  expect(screen.getByText("Couldn’t read connection status. Try again.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  expect(test.save).not.toHaveBeenCalled();
 });
