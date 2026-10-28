@@ -50,7 +50,11 @@ The BrowserApi CSRF inventory includes all six shared-authentication methods. It
 
 PostgreSQL regressions run a tool probe across a successful refresh that narrows or clears granted scopes. Both holder and reference snapshots must become pending with no tools, and the old probe must not restore its result. Scope ordering, duplicates and lifecycle-only `offline_access` changes retain snapshots; an explicitly empty granted scope remains empty rather than inheriting requested scopes. Separate installation tests make an old envelope unreadable and verify selection of a later valid source or return to ordinary OAuth without mutating the unreadable source.
 
-The review repair is validated by 22 MCP Server unit files / 761 tests, the shared-authentication PostgreSQL file / 15 tests, and two BrowserApi files / 34 tests. Repository checks, type checks and builds run separately. No schema or rendered layout changes are part of this repair, so the original migration and browser evidence remains scoped to the initial implementation.
+OAuth denial and callback-failure regressions exercise the shared authentication query through the real session hook and browser notification channel. Both cases fail before the repair: the local session settles while the shared row remains cached as authorizing. Every settled attempt now invalidates authentication and mount reads, including failure and cancellation.
+
+The browser smoke fixtures explicitly serve the batch authentication, installation lookup and Connect endpoints when reuse is disabled, instead of parsing collection names as Server IDs. Real OAuth journeys assert the common Connected status and preservation of existing tools during reauthorization. Failed OAuth preparation preserves the previously working key until a successful consent replaces it.
+
+The review repair is validated by 22 MCP Server unit files / 761 tests, the shared-authentication PostgreSQL file / 15 tests, and two BrowserApi files / 34 tests. Repository checks, type checks and builds run separately. The subsequent Web MCP regression run passes 30 files / 389 tests. Local full Browser Smoke covers all 113 tests: 112 passed in the full run; one strict locator ambiguity was corrected and that case passed separately. Retries were disabled. Web build and Web/E2E type checks pass; the final remote matrix remains required. No schema or rendered layout changes are part of this repair, so the original migration and browser evidence remains scoped to the initial implementation.
 
 ## Deployment acceptance
 

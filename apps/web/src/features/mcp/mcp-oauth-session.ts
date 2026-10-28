@@ -132,7 +132,6 @@ function createMcpOAuthSession(
         reserved,
         abort.signal,
       );
-      if (outcome === "authorized") await invalidate();
       return outcome;
     } finally {
       abort.abort();
@@ -141,6 +140,7 @@ function createMcpOAuthSession(
       fallback.current = undefined;
       setBlocked(false);
       setPhase(undefined);
+      await invalidate();
     }
   };
   async function finishAuthorization(

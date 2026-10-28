@@ -60,6 +60,8 @@ any referring Agent updates that same authentication for every member. The UI sh
 authentication state, error, expiry, progress and authentication action; enable switches and tool
 probes remain Agent-local. A failed tool probe alone does not mark authentication invalid. New
 connections show Connected immediately after reuse; probing runs in the background.
+Every settled browser OAuth attempt refreshes authentication and mount reads, including denial,
+callback failure and cancellation, so a completed flow does not leave a cached authorizing state.
 
 A new binding reserves its authorization row ID before discovery. A refused discovery leaves no
 published flow or credential, and a detach/recreate during discovery cannot receive the old result.

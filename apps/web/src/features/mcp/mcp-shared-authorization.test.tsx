@@ -5,8 +5,9 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { browserApi } from "../../api.js";
 import { useMcpConnectionOperation } from "./mcp-connection.js";
-import type { McpOAuthSession } from "./mcp-oauth-session.js";
-import { newerMcpAuthentication, useSharedMcpAuthentication } from "./mcp-queries.js";
+import { type McpOAuthSession, useMcpOAuthSession } from "./mcp-oauth-session.js";
+import { fakeMcpOAuthBrowser } from "./mcp-oauth-test-fixtures.js";
+import { newerMcpAuthentication, useMcpAuthentications, useSharedMcpAuthentication } from "./mcp-queries.js";
 import { McpServerCard } from "./mcp-server-card.js";
 import { McpSharedAuthentication } from "./mcp-shared-authentication.js";
 import { AGENT_ID, authorization, entry, SERVER_ID, stub, wrap } from "./mcp-test-fixtures.js";
@@ -24,6 +25,74 @@ const view: MCPAuthenticationView = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("shared authentication presentation", () => {
+  it.each(["MCP_OAUTH_DENIED", "MCP_OAUTH_FAILED"])(
+    "refreshes shared authentication immediately after %s",
+    async (code) => {
+      const server = entry({
+        authorization: { ...authorization(), kind: "oauth", status: "pending", hasCredential: false },
+      });
+      stub([server]);
+      const pending = { ...view, status: "authorizing" as const, flowExpiresAt: "2030-01-01T00:00:00.000Z" };
+      vi.mocked(browserApi.mcpAuthentications).mockResolvedValue({ authorizations: [pending] });
+      vi.spyOn(browserApi, "startMcpOAuth").mockResolvedValue({
+        authorizationUrl: "https://provider.test/authorize?state=shared-state",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      });
+      const browser = fakeMcpOAuthBrowser();
+      function Cards() {
+        const session = useMcpOAuthSession(AGENT_ID);
+        const [outcome, setOutcome] = useState("");
+        const query = useMcpAuthentications(AGENT_ID);
+        const authentication = useSharedMcpAuthentication(query.data?.authorizations[0]);
+        return (
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                void session
+                  .start({ agentId: AGENT_ID, serverId: SERVER_ID, source: "authorize" })
+                  .then(setOutcome, () => setOutcome("failed"))
+              }
+            >
+              Start authorization
+            </button>
+            <output>{outcome}</output>
+            <McpServerCard
+              entry={server}
+              authentication={authentication}
+              onAction={vi.fn()}
+              onResume={vi.fn()}
+              resuming={false}
+            />
+          </>
+        );
+      }
+      try {
+        wrap(<Cards />);
+        await screen.findByText("Waiting for authorization…");
+        fireEvent.click(screen.getByText("Start authorization"));
+        await waitFor(() => expect(browser.popup.location.replace).toHaveBeenCalled());
+        vi.mocked(browserApi.mcpAuthentications).mockResolvedValue({
+          authorizations: [
+            {
+              ...pending,
+              authenticationRevision: 2,
+              status: "authorization_required",
+              failureCode: code,
+              flowExpiresAt: null,
+            },
+          ],
+        });
+        browser.send({ mcpServerId: SERVER_ID, outcome: { kind: "error", code } });
+        await screen.findByText(code === "MCP_OAUTH_FAILED" ? "failed" : "cancelled");
+        await screen.findByText("Authorization failed");
+        expect(screen.queryByText("Waiting for authorization…")).toBeNull();
+        expect(screen.getByRole("button", { name: "Authorize: linear" })).toBeTruthy();
+      } finally {
+        browser.restore();
+      }
+    },
+  );
   it("shows the same connected state despite different local probes and OAuth windows", async () => {
     const a = entry({
       authorization: {
