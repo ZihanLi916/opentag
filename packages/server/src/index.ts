@@ -826,7 +826,7 @@ export async function startServer(): Promise<void> {
       registry,
       serverInstanceId: instanceId,
       authority: (request, context) => loadApprovalAuthority(database, request, context),
-      messenger: new ApprovalMessenger(imBindingService, imCallPolicy),
+      messenger: new ApprovalMessenger(imBindingService, imCallPolicy, config.publicUrl),
       onError: () => reportDiagnostic("RUNTIME_APPROVAL_FAILED"),
     });
     const durableWorkStore = new PostgresRuntimeDurableWorkStore(database);
@@ -920,7 +920,7 @@ export async function startServer(): Promise<void> {
       onDiagnostic: reportDiagnostic,
       supervisor: backgroundFailureSupervisor,
     });
-    const agentSetupService = new AgentSetupService(database, agentService, imBindingService, feishuSetupService, {
+    const agentSetupService = new AgentSetupService(database, agentService, feishuSetupService, {
       prepareComputer: async (input) => {
         const owner = providerCliReconcileOwner;
         if (!owner) throw new Error("Provider CLI preparation owner is unavailable");
@@ -1241,10 +1241,13 @@ export async function startServer(): Promise<void> {
       runtimeAgent: {
         service: new AgentSelfService({
           agents: agentService,
+          authorization: mcpAuthorization,
+          flows: mcpFlows,
           logger: serviceLogger("agent-self"),
           mcp: mcpServers,
           owners: new DatabaseAgentOwnerResolver(database),
           proofs: sessionCliProofService,
+          publicOrigin: config.publicUrl,
         }),
       },
       runtimeAgentSlackProvision: {

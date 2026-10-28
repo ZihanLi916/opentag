@@ -1,4 +1,4 @@
-import type { ListTasksResponse, TaskDetail, TaskSummary } from "@opentag/shared/browser";
+import type { ListTasksResponse, TaskSummary } from "@opentag/shared/browser";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode, useMemo, useState } from "react";
@@ -33,6 +33,7 @@ import {
 import { useRememberedState } from "./shell/shell-memory.js";
 import { TaskCancelControl } from "./task-cancel.js";
 import { TaskActivity } from "./task-conversation.js";
+import type { TaskDetailView } from "./task-detail-view.js";
 import {
   TASK_STATUS_GROUPS,
   type TaskStatusGroup,
@@ -358,8 +359,9 @@ export function TaskDetailPage({
   taskId?: string;
 }) {
   /*
-   * The Task itself, its internal Sessions and its collaboration messages come from the first page
-   * only, exactly as the hand-rolled append kept them; each further page contributes Turns.
+   * The first page carries the Task summary and its Turns, and nothing else: the conversation asks for
+   * the Turns section alone, so the Server does not read the Internal Session or collaboration history
+   * this view never renders. Each further page contributes Turns and no summary.
    */
   const detailKey = taskDetailQueryKey(taskId, showExamples);
   const taskQuery = useInfiniteQuery({
@@ -382,7 +384,7 @@ export function TaskDetailPage({
    * the canonical Task id, so a legacy Session-alias URL queries replies under the Task's real id
    * instead of the route's alias.
    */
-  const repliesQuery = useTaskRepliesQuery(showExamples ? undefined : first?.task.id);
+  const repliesQuery = useTaskRepliesQuery(showExamples ? undefined : first?.task?.id);
   const taskError = asError(taskQuery.error);
   const persistedError = usePersistedSettledError(detailKey, {
     error: taskQuery.error ? taskError : null,
@@ -403,13 +405,13 @@ export function TaskDetailPage({
   if (taskId !== undefined && taskQuery.isPending) {
     return <TaskNotice loading heading={m.tasks_loading_task()} detail={m.tasks_loading_task_detail()} />;
   }
-  if (!first) {
+  if (!first?.task) {
     // No Task id at all is the same answer as one the Server does not have.
     const error = taskId === undefined ? new ApiError(404, m.tasks_not_found()) : asError(taskQuery.error);
     return <TaskUnavailable agentId={agentId} error={error} showExamples={showExamples} />;
   }
 
-  const { task } = first;
+  const task = first.task;
   const status = taskStatusGroup(task.status);
   const repliesStatus = <TaskRepliesStatus query={repliesQuery} />;
   const pagination = (
@@ -921,18 +923,33 @@ async function readTasks({
   return browserApi.tasks({ agentId, cursor });
 }
 
+/**
+ * The first page carries the summary and the first page of every section; the conversation's own
+ * cursor continues only the Turns, which is the one section the reader scrolls.
+ */
 async function readTaskDetail(
   taskId: string,
   agentId?: string,
   cursor?: string,
   showExamples = false,
-): Promise<TaskDetail> {
+): Promise<TaskDetailView> {
   if (showExamples && !cursor) {
     const { createDevelopmentTaskDetail } = await loadDevelopmentTaskData();
     const detail = createDevelopmentTaskDetail(taskId, agentId ?? "40000000-0000-4000-8000-000000000001");
     if (detail) return detail;
   }
-  return browserApi.task(taskId, cursor);
+  if (cursor) {
+    const turns = await browserApi.taskTurns(taskId, cursor);
+    return { turns: turns.items, nextCursor: turns.nextCursor };
+  }
+  // The conversation renders the summary and the Turns; the other two sections are not asked for,
+  // and the Server does not read them.
+  const page = await browserApi.taskDetail(taskId, ["turns"]);
+  return {
+    task: page.task,
+    turns: page.turns?.items ?? [],
+    nextCursor: page.turns?.nextCursor ?? null,
+  };
 }
 
 async function loadDevelopmentTaskData() {

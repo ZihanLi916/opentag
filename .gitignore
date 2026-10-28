@@ -54,3 +54,6 @@ gha-creds-*.json
 
 # Standalone local bot-connection preview
 apps/web/dist-bot-preview/
+
+# Temporary module the cancellation benchmark generates next to the owner it compares against.
+.benchmark-before-*.ts

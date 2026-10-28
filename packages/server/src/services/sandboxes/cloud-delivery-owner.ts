@@ -7,6 +7,7 @@ import {
   DirectImMessageDeliveryRequestSchema,
   type EffectiveRuntimeSnapshot,
   RUNTIME_CAPABILITY,
+  RUNTIME_MAX_DURATION_MS,
   RUNTIME_SERVER_CAPABILITY_OFFERS,
   type RunnerCloudModelGrant,
   type RuntimeCredentialClientFrame,
@@ -51,9 +52,12 @@ import type { SandboxAllocationReconciliation } from "./sandbox-runner-service.j
  *   handleReport       -> recordTurn (turn_report/result_hash/reported_at) + `delivery:report:ack`
  * A receipt or report replay is idempotent. Accepted work is recovered from the PERSISTED
  * allocation identity (`reportOwnerInstanceId` vs `cloudInstanceIdFor`) — never from the presence
- * of an in-memory socket: a Server restart or transient disconnect keeps the turn pending, and
- * only a proven retired/superseded allocation (durable stop state or a verified physical absence)
- * may settle it as unknown without replay.
+ * of an in-memory socket: a Server restart or transient disconnect keeps the turn pending, and only
+ * a proven retired/superseded allocation (durable stop state or a verified physical absence), or the
+ * end of the window in which the Server still accepts a report for it, may settle it as unknown
+ * without replay. That end is a report ACCEPTANCE cutoff, not proof that no authentic report exists:
+ * a late authentic report is answered `conflict`, the recorded `unknown` stays terminal, and steered
+ * children returned to the queue by that settlement are not re-absorbed into the turn.
  */
 
 export type CloudDispatchFailure =
@@ -148,6 +152,12 @@ function requireDispatchableConnection(
 
 /** Transport allowance added to the dispatch deadline when minting an execution-scoped grant. */
 const CLOUD_MODEL_GRANT_TRANSPORT_MS = 30_000;
+
+/**
+ * Slack added to the execution window before the Server stops accepting a report as this turn's
+ * outcome, so a report written exactly as the window closes still counts.
+ */
+const ACCEPTED_REPORT_GRACE_MS = 60 * 60 * 1_000;
 
 export type CloudSessionCancelOutcome = {
   deliveryId: string;
@@ -749,6 +759,8 @@ export class CloudDeliveryOwner {
    * and credential executions) and best-effort cancel the owning turn on the exact allocation that
    * accepted it. Returns one meaningful outcome per delivery; a lost socket is `no_connection` and
    * stays reconcilable through `recoverAccepted`'s durable stopped-state route, never silent.
+   * Two statements regardless of the backlog: the eligible deliveries, then (only when the list is
+   * nonempty) the one Sandbox row `sandboxes_session_id_unique` guarantees for the Session.
    */
   async cancelSessionDeliveries(sessionId: string): Promise<CloudSessionCancelOutcome[]> {
     const rows = await this.#database
@@ -769,9 +781,12 @@ export class CloudDeliveryOwner {
       if (row.turnId) this.#revokeTurnGrants(row.turnId);
     }
     this.#credentials?.owner.closeSessionExecutions(sessionId, "execution_closed");
+    if (rows.length === 0) return [];
+    // The Session's single Sandbox row is read once for the whole backlog. The connection fence
+    // itself stays a per-delivery read, so a replacement attached mid-loop is still observed.
+    const sandbox = await loadSandboxRecordBySessionId(this.#database, sessionId);
     const outcomes: CloudSessionCancelOutcome[] = [];
     for (const row of rows) {
-      const sandbox = await loadSandboxRecordBySessionId(this.#database, sessionId);
       const record = sandbox ? this.#fence.connectionForSandbox(sandbox.id) : undefined;
       if (!record || record.instanceId !== row.reportOwnerInstanceId || !this.#isExactConnection(record)) {
         outcomes.push({ deliveryId: row.id, status: "no_connection" });
@@ -793,11 +808,18 @@ export class CloudDeliveryOwner {
    * - a superseded generation or a durably stopped/released allocation settles exactly once as
    *   unknown/turn_state_unknown and is never replayed;
    * - a live allocation with a live exact connection queries the Runner's journal (`received`
-   *   re-verifies, `started` stays pending — it is a live phase, not a crash — `reported` awaits
-   *   the Runner's replayed report, and only an explicit `none` settles unknown);
+   *   re-verifies, `started` stays pending — it is a live phase, not a crash — and `reported` stays
+   *   pending because the Runner replays that report on the same socket; only an explicit `none`
+   *   settles unknown);
    * - a live allocation with no connection stays pending while the allocation is physically
    *   present or its create outcome is still unverified, so a Server restart or transient
-   *   disconnect can never destroy a genuine result.
+   *   disconnect can never destroy a genuine result;
+   * - a report the Server can no longer accept — a proven absence, or the end of the frozen
+   *   execution window (and, without one, the maximum runtime from acceptance) plus its grace —
+   *   settles unknown exactly once, but only while no exact Runner owns the turn: the absent-probe
+   *   await can outlive a reconnect, so the owner is re-read after it. This is a report acceptance
+   *   cutoff, not proof that no authentic report exists: the late report is answered `conflict` and
+   *   cannot replace the terminal hash.
    */
   async recoverAccepted(deliveryId: string): Promise<"pending" | "resolved" | "noop"> {
     const [row] = await this.#database
@@ -813,14 +835,48 @@ export class CloudDeliveryOwner {
     if (allocation.kind === "settle") return this.#settleUnknown(deliveryId);
     if (allocation.kind === "pending") return "pending";
 
-    const record = this.#fence.connectionForSandbox(allocation.sandboxId);
-    if (record && record.instanceId === delivery.reportOwnerInstanceId && this.#isExactConnection(record)) {
-      return this.#recoverLive(record, delivery);
-    }
+    const live = this.#exactLiveOwner(allocation.sandboxId, delivery);
+    if (live) return this.#recoverLive(live, delivery);
     // No exact live connection. A physically verified absence of the tracked resource is the only
     // additional proof that no report can ever arrive; anything else stays pending for the replay.
     const reconciliation = await this.#allocationStatus?.(allocation.sandboxId);
-    return reconciliation?.physical === "absent" ? this.#settleUnknown(deliveryId) : "pending";
+    if (reconciliation?.physical === "absent") return this.#settleUnknown(deliveryId);
+    // The probe awaited: this overdue allocation can reconnect while it is pending, and an exact
+    // current Runner would then be the only owner that can still replay the report. Settling it here
+    // would overwrite a genuine in-flight result, so re-read the owner and query it instead.
+    const reconnected = this.#exactLiveOwner(allocation.sandboxId, delivery);
+    if (reconnected) return this.#recoverLive(reconnected, delivery);
+    // An inconclusive probe must not retry forever: once every window in which this report could
+    // still be truthful has passed, the outcome is unknown, exactly as a proven absence settles it.
+    if (Date.now() >= this.#acceptedReportDeadlineMs(delivery)) return this.#settleUnknown(deliveryId);
+    return "pending";
+  }
+
+  /** The exact current Runner connection that owns this accepted turn, if one is attached now. */
+  #exactLiveOwner(
+    sandboxId: string,
+    delivery: typeof imMessageDeliveries.$inferSelect,
+  ): CloudConnectionRecord | undefined {
+    const record = this.#fence.connectionForSandbox(sandboxId);
+    return record && record.instanceId === delivery.reportOwnerInstanceId && this.#isExactConnection(record)
+      ? record
+      : undefined;
+  }
+
+  /**
+   * The last instant at which the Server still accepts a report as this turn's outcome. The dispatch
+   * freezes the execution window into `deadlineAt`; without one, the platform maximum runtime bounds
+   * the turn from acceptance. The grace covers a report that is written as the window closes. This is
+   * an acceptance cutoff, not evidence that no authentic report exists.
+   */
+  #acceptedReportDeadlineMs(delivery: typeof imMessageDeliveries.$inferSelect): number {
+    const parsed = DirectImMessageDeliveryRequestSchema.safeParse(delivery.dispatchPayload);
+    const frozenDeadlineMs = parsed.success && parsed.data.deadlineAt ? Date.parse(parsed.data.deadlineAt) : Number.NaN;
+    if (Number.isFinite(frozenDeadlineMs)) return frozenDeadlineMs + ACCEPTED_REPORT_GRACE_MS;
+    const acceptedAtMs = delivery.acceptedAt?.getTime();
+    return Number.isFinite(acceptedAtMs)
+      ? (acceptedAtMs as number) + RUNTIME_MAX_DURATION_MS + ACCEPTED_REPORT_GRACE_MS
+      : Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -875,7 +931,7 @@ export class CloudDeliveryOwner {
       deliveryId: delivery.id,
       turnId: delivery.turnId as string,
     });
-    if (!answer || answer === "reported") return "pending";
+    if (!answer || answer === "reported") return this.#awaitReplayedReport(record, delivery, answer);
     if (answer === "none") return this.#settleUnknown(delivery.id);
 
     // Re-check after the query await: a replaced connection, superseded allocation, or terminal
@@ -901,6 +957,34 @@ export class CloudDeliveryOwner {
     // normal durable report path). Started work is never discarded as unknown here; a
     // disconnected/replaced socket simply stays pending.
     this.#sendCancellation(record, delivery.id);
+    return "pending";
+  }
+
+  /**
+   * The Runner answered that its journal still holds a report for this turn — or the query went
+   * unanswered. The real Client sends the answer and then replays that report on the same socket
+   * (`cloud-turns.ts:handleQuery`), so an answer is evidence a report is imminent, never that one is
+   * missing: settling here would make the replay fail with `conflict`. Past the acceptance cutoff the
+   * replay can no longer be recorded, which is a defect in the report path, so the overdue replay is
+   * logged for that path instead of being covered by a terminal settlement.
+   */
+  #awaitReplayedReport(
+    record: CloudConnectionRecord,
+    delivery: typeof imMessageDeliveries.$inferSelect,
+    answer: "none" | "received" | "started" | "reported" | undefined,
+  ): "pending" {
+    if (Date.now() >= this.#acceptedReportDeadlineMs(delivery)) {
+      this.#logger?.warn(
+        {
+          code: "CLOUD_DELIVERY_REPORT_REPLAY_OVERDUE",
+          computerId: record.computerId,
+          deliveryId: delivery.id,
+          phase: answer ?? "no_answer",
+          turnId: delivery.turnId,
+        },
+        "Cloud Runner still holds a report the Server has not recorded past the acceptance cutoff",
+      );
+    }
     return "pending";
   }
 
@@ -1047,6 +1131,7 @@ export class CloudDeliveryOwner {
     executionEligible?: boolean;
     turnActivityVersion?: 1;
     githubUserTaskVersion?: 1;
+    contextTreeExecutionVersion?: 1;
     /** E8: only when the Runner negotiated the collaboration capability at the same handshake. */
     sessionCollaborationEligible?: boolean;
     /** Exact E8 collaboration version; required to authorize a scheduled-origin frame. */
@@ -1137,6 +1222,7 @@ export class CloudDeliveryOwner {
         [RUNTIME_CAPABILITY.providerProxy]: 1,
         [RUNTIME_CAPABILITY.runtimeCredential]: 1,
         ...(connection.githubUserTaskVersion === 1 ? { [RUNTIME_CAPABILITY.githubUserTask]: 1 } : {}),
+        ...(connection.contextTreeExecutionVersion === 1 ? { [RUNTIME_CAPABILITY.contextTreeExecution]: 1 } : {}),
         /*
          * Platform web tools are a default Cloud capability on the Runner channel, exactly like the
          * controlled model path: the execution still only receives the `web` service when the

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { MCP_ERROR_CODES, McpServiceError } from "./errors.js";
 import type { McpAuthorizationService } from "./mcp-authorization-service.js";
 import type { McpUpstreamCaller } from "./mcp-gateway-upstream.js";
+import { parseMcpParameterHeaders } from "./mcp-parameter-headers.js";
 import { type McpJoinedBinding, McpServerService } from "./mcp-server-service.js";
 
 /**
@@ -146,6 +147,9 @@ export class McpGatewayService {
     }
     const effective = McpServerService.resolveEffectiveConfig(resolved.server, resolved.binding);
     const headers = this.#authorizations.buildHeadersFor(resolved);
+    const inputSchema = readToolSnapshot(resolved.authorization.tools).find(
+      (tool) => tool.name === target.upstreamName,
+    )?.inputSchema;
     const call = await this.#upstream.call({
       accountId: input.accountId,
       url: effective.url,
@@ -153,6 +157,7 @@ export class McpGatewayService {
       method: "tools/call",
       params: { name: target.upstreamName, arguments: input.arguments ?? {} },
       name: target.upstreamName,
+      ...(inputSchema == null ? {} : { inputSchema }),
       cachedEra: resolved.authorization.protocolEra,
       cachedVersion: resolved.authorization.protocolVersion,
       ...(input.signal ? { signal: input.signal } : {}),
@@ -184,11 +189,26 @@ function usableMounts(bindings: readonly McpJoinedBinding[], notes: string[]): U
       );
       continue;
     }
-    const tools = readToolSnapshot(authorization.tools);
+    const tools = usableToolSnapshot(authorization, serverName, notes);
     if (tools.length === 0) continue;
     usable.push({ joined, serverName, tools });
   }
   return usable;
+}
+
+function usableToolSnapshot(
+  authorization: NonNullable<McpJoinedBinding["authorization"]>,
+  serverName: string,
+  notes: string[],
+): MCPToolSnapshot[] {
+  const tools = readToolSnapshot(authorization.tools);
+  if (authorization.protocolEra === "legacy") return tools;
+  return tools.filter((tool) => {
+    const parsed = parseMcpParameterHeaders(tool.inputSchema);
+    if (parsed.valid) return true;
+    notes.push(`MCP tool "${composeGatewayToolName(serverName, tool.name)}" was excluded: ${parsed.reason}.`);
+    return false;
+  });
 }
 
 interface ToolCandidate {

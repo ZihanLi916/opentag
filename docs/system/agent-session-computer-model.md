@@ -32,6 +32,13 @@ Runtime suspension, and Computer disconnect do not end them. Only an explicit
 end sets `ended_at`. A later valid ensure for the same chat scope creates a new
 Session identity instead of reviving the ended Session.
 
+The Session closure (`session_descendants`) records, per ancestor and descendant
+pair, the latest message activity and `descendant_active`, which is defined as
+`descendant.ended_at is null`. The transaction that ends a Session writes both
+facts, so the pair never disagrees: an ended descendant is inactive in every row
+that names it as the descendant, including the rows of its own ancestors. The
+flag describes the descendant only — ending an ancestor does not change it.
+
 ## Execution and placement
 
 Session, Session Runtime, Computer, and Workspace have independent lifecycles:
@@ -81,6 +88,14 @@ concurrent Computer mutation. It permits the `KEY SHARE` required when a Session
 proof is first inserted. Rebind keeps Agent → target Computer → Session placements order;
 proof minting keeps its placement lock and existing connection/generation checks. A rebind
 to the current Computer retains its no-op semantics and does not rotate an existing proof.
+
+Local scheduled dispatch prepares its Session CLI proof before entering final dispatch admission.
+Proof preparation commits its own placement transaction first. Before each reconcile or message
+send, admission locks Agent → IM binding → Session → placement → Computer → Schedule and rechecks
+authority, placement, schedule enablement, and the claimed schedule revision. It releases these
+locks when the send is marked, without waiting for the Runtime receipt. The transport boundary
+also checks the current connection and cancellation signal, so delayed preparation cannot bypass
+a committed management change or send after the dispatch deadline.
 
 The staging/development reset uses the same weaker guard during Computer access
 revocation. Its separate final cleanup verification keeps its existing lock.
